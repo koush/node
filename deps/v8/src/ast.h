@@ -117,6 +117,7 @@ typedef ZoneList<Handle<Object> > ZoneObjectList;
 
 
 #define DECLARE_NODE_TYPE(type)                                         \
+  virtual void printType() { printf(#type); printf("\n"); }             \
   virtual void Accept(AstVisitor* v);                                   \
   virtual AstNode::Type node_type() const { return AstNode::k##type; }  \
   virtual type* As##type() { return this; }
@@ -151,6 +152,7 @@ class AstNode: public ZoneObject {
 
   virtual void Accept(AstVisitor* v) = 0;
   virtual Type node_type() const { return kInvalid; }
+  virtual void printType() { printf("none\n"); }
 
   // Type testing & conversion functions overridden by concrete subclasses.
 #define DECLARE_NODE_FUNCTIONS(type)                  \
@@ -1636,7 +1638,8 @@ class FunctionLiteral: public Expression {
                   int start_position,
                   int end_position,
                   Type type,
-                  bool has_duplicate_parameters)
+                  bool has_duplicate_parameters,
+                  bool is_async)
       : Expression(isolate),
         name_(name),
         scope_(scope),
@@ -1654,7 +1657,8 @@ class FunctionLiteral: public Expression {
         is_expression_(type != DECLARATION),
         is_anonymous_(type == ANONYMOUS_EXPRESSION),
         pretenure_(false),
-        has_duplicate_parameters_(has_duplicate_parameters) {
+        has_duplicate_parameters_(has_duplicate_parameters),
+        is_async_(is_async) {
   }
 
   DECLARE_NODE_TYPE(FunctionLiteral)
@@ -1668,6 +1672,7 @@ class FunctionLiteral: public Expression {
   int end_position() const { return end_position_; }
   bool is_expression() const { return is_expression_; }
   bool is_anonymous() const { return is_anonymous_; }
+  bool is_async() const { return is_async_; }
   bool strict_mode() const;
 
   int materialized_literal_count() { return materialized_literal_count_; }
@@ -1715,6 +1720,7 @@ class FunctionLiteral: public Expression {
   bool is_anonymous_;
   bool pretenure_;
   bool has_duplicate_parameters_;
+  bool is_async_;
 };
 
 

@@ -175,7 +175,10 @@ namespace internal {
   T(ILLEGAL, "ILLEGAL", 0)                                              \
                                                                         \
   /* Scanner-internal use only. */                                      \
-  T(WHITESPACE, NULL, 0)
+  T(WHITESPACE, NULL, 0)                                                \
+                                                                        \
+  K(AWAIT, "await", 0)                                                  \
+  K(ASYNC, "async", 0)
 
 
 class Token {

@@ -231,9 +231,31 @@ PreParser::Statement PreParser::ParseStatement(bool* ok) {
     case i::Token::DEBUGGER:
       return ParseDebuggerStatement(ok);
 
+    case i::Token::AWAIT:
+      return ParseAwaitStatement(ok);
+
+    case i::Token::ASYNC: {
+      bool was_async_function = async_function_;
+      async_function_ = true;
+      Statement ret = ParseAsyncStatement(ok);
+      async_function_ = was_async_function;
+      return ret;
+    }
+
     default:
       return ParseExpressionOrLabelledStatement(ok);
   }
+}
+
+PreParser::Statement PreParser::ParseAsyncStatement(bool* ok) {
+  Expect(i::Token::ASYNC, CHECK_OK);
+  return ParseFunctionDeclaration(ok);
+}
+
+
+PreParser::Statement PreParser::ParseAwaitStatement(bool* ok) {
+  Expect(i::Token::AWAIT, CHECK_OK);
+  return Statement::ExpressionStatement(ParseFunctionLiteral(ok, false, i::Token::ASSIGN, false));
 }
 
 
@@ -496,6 +518,13 @@ PreParser::Statement PreParser::ParseWithStatement(bool* ok) {
 PreParser::Statement PreParser::ParseSwitchStatement(bool* ok) {
   // SwitchStatement ::
   //   'switch' '(' Expression ')' '{' CaseClause* '}'
+
+  if (async_function_) {
+    *ok = false;
+    i::Scanner::Location location = scanner_->location();
+    ReportMessageAt(location.beg_pos, location.end_pos, "illegal_async_switch", NULL);
+    return Statement::Default();
+  }
 
   Expect(i::Token::SWITCH, CHECK_OK);
   Expect(i::Token::LPAREN, CHECK_OK);
@@ -936,8 +965,15 @@ PreParser::Expression PreParser::ParseMemberWithNewPrefixesExpression(
 
   // Parse the initial primary or function expression.
   Expression result = Expression::Default();
-  if (peek() == i::Token::FUNCTION) {
-    Consume(i::Token::FUNCTION);
+  bool async_function = peek() == i::Token::ASYNC;
+  if (async_function || peek() == i::Token::FUNCTION) {
+    if (async_function) {
+      Consume(i::Token::ASYNC);
+      Expect(i::Token::FUNCTION, CHECK_OK);
+    }
+    else {
+      Consume(i::Token::FUNCTION);
+    }
     Identifier identifier = Identifier::Default();
     if (peek_any_identifier()) {
       identifier = ParseIdentifier(CHECK_OK);
@@ -1264,7 +1300,10 @@ PreParser::Arguments PreParser::ParseArguments(bool* ok) {
 }
 
 
-PreParser::Expression PreParser::ParseFunctionLiteral(bool* ok) {
+PreParser::Expression PreParser::ParseFunctionLiteral(bool* ok,
+                                                      bool require_lparen,
+                                                      i::Token::Value param_end_token,
+                                                      bool process_braces) {
   // Function ::
   //   '(' FormalParameterList? ')' '{' FunctionBody '}'
 
@@ -1274,9 +1313,10 @@ PreParser::Expression PreParser::ParseFunctionLiteral(bool* ok) {
   Scope function_scope(&scope_, kFunctionScope);
   //  FormalParameterList ::
   //    '(' (Identifier)*[','] ')'
-  Expect(i::Token::LPAREN, CHECK_OK);
+  if (require_lparen)
+    Expect(i::Token::LPAREN, CHECK_OK);
   int start_position = scanner_->location().beg_pos;
-  bool done = (peek() == i::Token::RPAREN);
+  bool done = (peek() == param_end_token);
   DuplicateFinder duplicate_finder(scanner_->unicode_cache());
   while (!done) {
     Identifier id = ParseIdentifier(CHECK_OK);
@@ -1300,14 +1340,15 @@ PreParser::Expression PreParser::ParseFunctionLiteral(bool* ok) {
                              "strict_param_dupe",
                              CHECK_OK);
     }
-    done = (peek() == i::Token::RPAREN);
+    done = (peek() == param_end_token);
     if (!done) {
       Expect(i::Token::COMMA, CHECK_OK);
     }
   }
-  Expect(i::Token::RPAREN, CHECK_OK);
+  Expect(param_end_token, CHECK_OK);
 
-  Expect(i::Token::LBRACE, CHECK_OK);
+  if (process_braces)
+    Expect(i::Token::LBRACE, CHECK_OK);
   int function_block_pos = scanner_->location().beg_pos;
 
   // Determine if the function will be lazily compiled.
@@ -1324,7 +1365,8 @@ PreParser::Expression PreParser::ParseFunctionLiteral(bool* ok) {
     log_->ResumeRecording();
     if (!*ok) Expression::Default();
 
-    Expect(i::Token::RBRACE, CHECK_OK);
+    if (process_braces)
+      Expect(i::Token::RBRACE, CHECK_OK);
 
     // Position right after terminal '}'.
     int end_pos = scanner_->location().end_pos;
@@ -1334,7 +1376,8 @@ PreParser::Expression PreParser::ParseFunctionLiteral(bool* ok) {
                       strict_mode() ? 1 : 0);
   } else {
     ParseSourceElements(i::Token::RBRACE, CHECK_OK);
-    Expect(i::Token::RBRACE, CHECK_OK);
+    if (process_braces)
+      Expect(i::Token::RBRACE, CHECK_OK);
   }
 
   if (strict_mode()) {
