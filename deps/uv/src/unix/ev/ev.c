@@ -1958,6 +1958,12 @@ ev_loop_new (unsigned int flags)
 
 #endif /* multiplicity */
 
+int
+ev_loop_refcount (EV_P)
+{
+  return activecnt;
+}
+
 #if EV_VERIFY
 static void noinline
 verify_watcher (EV_P_ W w)
@@ -2548,6 +2554,7 @@ void
 ev_unref (EV_P)
 {
   --activecnt;
+  if (activecnt < 0) abort();
 }
 
 void

@@ -1,4 +1,4 @@
-## HTTP
+# HTTP
 
 To use the HTTP server and client one must `require('http')`.
 
@@ -23,7 +23,14 @@ parsing only. It parses a message into headers and body but it does not
 parse the actual headers or the body.
 
 
-## http.Server
+## http.createServer([requestListener])
+
+Returns a new web server object.
+
+The `requestListener` is a function which is automatically
+added to the `'request'` event.
+
+## Class: http.Server
 
 This is an `EventEmitter` with the following events:
 
@@ -88,13 +95,6 @@ sent to the server on that socket.
 
 If a client connection emits an 'error' event - it will forwarded here.
 
-### http.createServer([requestListener])
-
-Returns a new web server object.
-
-The `requestListener` is a function which is automatically
-added to the `'request'` event.
-
 ### server.listen(port, [hostname], [callback])
 
 Begin accepting connections on the specified port and hostname.  If the
@@ -103,40 +103,44 @@ IPv4 address (`INADDR_ANY`).
 
 To listen to a unix socket, supply a filename instead of port and hostname.
 
-This function is asynchronous. The last parameter `callback` will be called
-when the server has been bound to the port.
+This function is asynchronous. The last parameter `callback` will be added as
+a listener for the ['listening'](net.html#event_listening_) event.
+See also [net.Server.listen()](net.html#server.listen).
 
 
 ### server.listen(path, [callback])
 
 Start a UNIX socket server listening for connections on the given `path`.
 
-This function is asynchronous. The last parameter `callback` will be called
-when the server has been bound.
+This function is asynchronous. The last parameter `callback` will be added as
+a listener for the ['listening'](net.html#event_listening_) event.
+See also [net.Server.listen()](net.html#server.listen).
 
 
 ### server.close()
 
 Stops the server from accepting new connections.
+See [net.Server.close()](net.html#server.close).
 
 
-## http.ServerRequest
+## Class: http.ServerRequest
 
 This object is created internally by a HTTP server -- not by
 the user -- and passed as the first argument to a `'request'` listener.
 
-This is an `EventEmitter` with the following events:
+The request implements the [Readable Stream](stream.html#readable_stream)
+interface. This is an `EventEmitter` with the following events:
 
 ### Event: 'data'
 
 `function (chunk) { }`
 
-Emitted when a piece of the message body is received.
+Emitted when a piece of the message body is received. The chunk is a string if
+an encoding has been set with `request.setEncoding()`, otherwise it's a
+[Buffer](buffer.html).
 
-Example: A chunk of the body is given as the single
-argument. The transfer-encoding has been decoded.  The
-body chunk is a string.  The body encoding is set with
-`request.setEncoding()`.
+Note that the __data will be lost__ if there is no listener when a
+`ServerRequest` emits a `'data'` event.
 
 ### Event: 'end'
 
@@ -213,7 +217,7 @@ Also `request.httpVersionMajor` is the first integer and
 `request.httpVersionMinor` is the second.
 
 
-### request.setEncoding(encoding=null)
+### request.setEncoding([encoding])
 
 Set the encoding for the request body. Either `'utf8'` or `'binary'`. Defaults
 to `null`, which means that the `'data'` event will emit a `Buffer` object..
@@ -239,10 +243,20 @@ authentication details.
 
 
 
-## http.ServerResponse
+## Class: http.ServerResponse
 
 This object is created internally by a HTTP server--not by the user. It is
-passed as the second parameter to the `'request'` event. It is a `Writable Stream`.
+passed as the second parameter to the `'request'` event.
+
+The response implements the [Writable  Stream](stream.html#writable_stream)
+interface. This is an `EventEmitter` with the following events:
+
+### Event: 'close'
+
+`function () { }`
+
+Indicates that the underlaying connection was terminated before
+`response.end()` was called or able to flush.
 
 ### response.writeContinue()
 
@@ -324,7 +338,7 @@ Example:
     response.removeHeader("Content-Encoding");
 
 
-### response.write(chunk, encoding='utf8')
+### response.write(chunk, [encoding])
 
 If this method is called and `response.writeHead()` has not been called, it will
 switch to implicit header mode and flush the implicit headers.
@@ -477,7 +491,7 @@ Example:
     });
 
 
-## http.Agent
+## Class: http.Agent
 
 In node 0.5.3+ there is a new implementation of the HTTP Agent which is used
 for pooling sockets used in HTTP client requests.
@@ -508,10 +522,6 @@ Alternatively, you could just opt out of pooling entirely using `agent:false`:
       // Do stuff
     })
 
-## http.globalAgent
-
-Global instance of Agent which is used as the default for all http client requests.
-
 ### agent.maxSockets
 
 By default set to 5. Determines how many concurrent sockets the agent can have 
@@ -527,8 +537,13 @@ modify.
 An object which contains queues of requests that have not yet been assigned to 
 sockets. Do not modify.
 
+## http.globalAgent
 
-## http.ClientRequest
+Global instance of Agent which is used as the default for all http client
+requests.
+
+
+## Class: http.ClientRequest
 
 This object is created internally and returned from `http.request()`.  It
 represents an _in-progress_ request whose header has already been queued.  The
@@ -565,11 +580,11 @@ event, the entire body will be caught.
       }, 10);
     });
 
-This is a `Writable Stream`.
 Note: Node does not check whether Content-Length and the length of the body
 which has been transmitted are equal or not.
 
-This is an `EventEmitter` with the following events:
+The request implements the [Writable  Stream](stream.html#writable_stream)
+interface. This is an `EventEmitter` with the following events:
 
 ### Event 'response'
 
@@ -644,13 +659,13 @@ A client server pair that show you how to listen for the `upgrade` event using `
 
 ### Event: 'continue'
 
-`function ()`
+`function () { }`
 
 Emitted when the server sends a '100 Continue' HTTP response, usually because
 the request contained 'Expect: 100-continue'. This is an instruction that
 the client should send the request body.
 
-### request.write(chunk, encoding='utf8')
+### request.write(chunk, [encoding])
 
 Sends a chunk of the body.  By calling this method
 many times, the user can stream a request body to a
@@ -658,11 +673,10 @@ server--in that case it is suggested to use the
 `['Transfer-Encoding', 'chunked']` header line when
 creating the request.
 
-The `chunk` argument should be an array of integers
-or a string.
+The `chunk` argument should be a [buffer](buffer.html) or a string.
 
-The `encoding` argument is optional and only
-applies when `chunk` is a string.
+The `encoding` argument is optional and only applies when `chunk` is a string.
+Defaults to `'utf8'`.
 
 
 ### request.end([data], [encoding])
@@ -671,8 +685,8 @@ Finishes sending the request. If any parts of the body are
 unsent, it will flush them to the stream. If the request is
 chunked, this will send the terminating `'0\r\n\r\n'`.
 
-If `data` is specified, it is equivalent to calling `request.write(data, encoding)`
-followed by `request.end()`.
+If `data` is specified, it is equivalent to calling
+`request.write(data, encoding)` followed by `request.end()`.
 
 ### request.abort()
 
@@ -684,13 +698,13 @@ Once a socket is assigned to this request and is connected
 [socket.setTimeout(timeout, [callback])](net.html#socket.setTimeout)
 will be called.
 
-### request.setNoDelay(noDelay=true)
+### request.setNoDelay([noDelay])
 
 Once a socket is assigned to this request and is connected 
 [socket.setNoDelay(noDelay)](net.html#socket.setNoDelay)
 will be called.
 
-### request.setSocketKeepAlive(enable=false, [initialDelay])
+### request.setSocketKeepAlive([enable], [initialDelay])
 
 Once a socket is assigned to this request and is connected 
 [socket.setKeepAlive(enable, [initialDelay])](net.html#socket.setKeepAlive)
@@ -701,13 +715,18 @@ will be called.
 This object is created when making a request with `http.request()`. It is
 passed to the `'response'` event of the request object.
 
-The response implements the `Readable Stream` interface.
+The response implements the [Readable Stream](stream.html#readable_stream)
+interface. This is an `EventEmitter` with the following events:
+
 
 ### Event: 'data'
 
 `function (chunk) { }`
 
 Emitted when a piece of the message body is received.
+
+Note that the __data will be lost__ if there is no listener when a
+`ClientResponse` emits a `'data'` event.
 
 
 ### Event: 'end'
@@ -745,10 +764,11 @@ The response headers object.
 
 The response trailers object. Only populated after the 'end' event.
 
-### response.setEncoding(encoding=null)
+### response.setEncoding([encoding])
 
-Set the encoding for the response body. Either `'utf8'`, `'ascii'`, or `'base64'`.
-Defaults to `null`, which means that the `'data'` event will emit a `Buffer` object..
+Set the encoding for the response body. Either `'utf8'`, `'ascii'`, or
+`'base64'`. Defaults to `null`, which means that the `'data'` event will emit
+a `Buffer` object.
 
 ### response.pause()
 

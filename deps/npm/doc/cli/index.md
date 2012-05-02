@@ -54,6 +54,10 @@ npm-index(1) -- Index of all npm documentation
 
  Developer Guide
 
+## npm-disputes(1)
+
+ Handling Module Name Disputes
+
 ## npm-docs(1)
 
  Docs for a package in a web browser maybe
@@ -165,6 +169,10 @@ npm-index(1) -- Index of all npm documentation
 ## npm-semver(1)
 
  The semantic versioner for npm
+
+## npm-shrinkwrap(1)
+
+ Lock down dependency versions
 
 ## npm-star(1)
 
@@ -318,6 +326,10 @@ npm-index(1) -- Index of all npm documentation
 ## npm-search(3)
 
  Search for packages
+
+## npm-shrinkwrap(3)
+
+ programmatically generate package shrinkwrap file
 
 ## npm-start(3)
 

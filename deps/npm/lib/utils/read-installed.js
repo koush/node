@@ -125,7 +125,8 @@ function readInstalled_ (folder, parent, name, reqver, depth, maxDepth, cb) {
   })
 
   readJson(path.resolve(folder, "package.json"), function (er, data) {
-    obj = data
+    obj = copy(data)
+
     if (!parent) {
       obj = obj || true
       er = null
@@ -196,6 +197,16 @@ function readInstalled_ (folder, parent, name, reqver, depth, maxDepth, cb) {
       installedData.forEach(function (dep) {
         obj.dependencies[dep.realName] = dep
       })
+
+      // any strings here are unmet things.  however, if it's
+      // optional, then that's fine, so just delete it.
+      if (obj.optionalDependencies) {
+        Object.keys(obj.optionalDependencies).forEach(function (dep) {
+          if (typeof obj.dependencies[dep] === "string") {
+            delete obj.dependencies[dep]
+          }
+        })
+      }
       return cb(null, obj)
     })
   }
@@ -253,9 +264,19 @@ function findUnmet (obj) {
         }
         deps[d] = found
       }
+
     })
   log.verbose([obj._id], "returning")
   return obj
+}
+
+function copy (obj) {
+  if (!obj || typeof obj !== 'object') return obj
+  if (Array.isArray(obj)) return obj.map(copy)
+
+  var o = {}
+  for (var i in obj) o[i] = copy(obj[i])
+  return o
 }
 
 if (module === require.main) {

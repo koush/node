@@ -284,10 +284,8 @@ void uv_fs_event_endgame(uv_loop_t* loop, uv_fs_event_t* handle);
 
 /* Utils */
 int uv_parent_pid();
-
-
+void uv_filetime_to_time_t(FILETIME* file_time,  time_t* stat_time);
 void uv_fatal_error(const int errorno, const char* syscall);
-
 uv_err_code uv_translate_sys_error(int sys_errno);
 
 #define SET_REQ_STATUS(req, status)                                     \
@@ -338,6 +336,10 @@ int WSAAPI uv_wsarecvfrom_workaround(SOCKET socket, WSABUF* buffers,
 
 /* Whether ipv6 is supported */
 extern int uv_allow_ipv6;
+
+/* Whether there are any non-IFS LSPs stacked on TCP */
+extern int uv_tcp_non_ifs_lsp_ipv4;
+extern int uv_tcp_non_ifs_lsp_ipv6;
 
 /* Ip address used to bind to any port at any interface */
 extern struct sockaddr_in uv_addr_ip4_any_;

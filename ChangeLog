@@ -1,4 +1,190 @@
-2011.12.14, Version 0.6.6 (stable)
+2012.03.02 Version 0.6.12 (stable)
+
+* Upgrade V8 to 3.6.6.24
+
+* dtrace ustack helper improvements (Dave Pacheco)
+
+* API Documentation refactor (isaacs)
+
+* #2827 net: fix race write() before and after connect() (koichik)
+
+* #2554 #2567 throw if fs args for 'start' or 'end' are strings (AJ ONeal)
+
+* punycode: Update to v1.0.0 (Mathias Bynens)
+
+* Make a fat binary for the OS X pkg (isaacs)
+
+* Fix hang on accessing process.stdin (isaacs)
+
+* repl: make tab completion work on non-objects (Nathan Rajlich)
+
+* Fix fs.watch on OS X (Ben Noordhuis)
+
+* Fix #2515 nested setTimeouts cause premature process exit (Ben Noordhuis)
+
+* windows: fix time conversion in stat (Igor Zinkovsky)
+
+* windows: fs: handle EOF in read (Brandon Philips)
+
+* windows: avoid IOCP short-circuit on non-ifs lsps (Igor Zinkovsky)
+
+* Upgrade npm to 1.1.4 (isaacs)
+  - windows fixes
+  - Bundle nested bundleDependencies properly
+  - install: support --save with url install targets
+  - shrinkwrap: behave properly with url-installed modules
+  - support installing uncompressed tars or single file modules from urls etc.
+  - don't run make clean on rebuild
+  - support HTTPS-over-HTTP proxy tunneling
+
+
+2012.02.17 Version 0.6.11 (stable), 1eb1fe32250fc88cb5b0a97cddf3e02be02e3f4a
+
+* http: allow multiple WebSocket RFC6455 headers (Einar Otto Stangvik)
+
+* http: allow multiple WWW-Authenticate headers (Ben Noordhuis)
+
+* windows: support unicode argv and environment variables (Bert Belder)
+
+* tls: mitigate session renegotiation attacks (Ben Noordhuis)
+
+* tcp, pipe: don't assert on uv_accept() errors (Ben Noordhuis)
+
+* tls: Allow establishing secure connection on the existing socket (koichik)
+
+* dgram: handle close of dgram socket before DNS lookup completes (Seth Fitzsimmons)
+
+* windows: Support half-duplex pipes (Igor Zinkovsky)
+
+* build: disable omit-frame-pointer on solaris systems (Dave Pacheco)
+
+* debugger: fix --debug-brk (Ben Noordhuis)
+
+* net: fix large file downloads failing (koichik)
+
+* fs: fix ReadStream failure to read from existing fd (Christopher Jeffrey)
+
+* net: destroy socket on DNS error (Stefan Rusu)
+
+* dtrace: add missing translator (Dave Pacheco)
+
+* unix: don't flush tty on switch to raw mode (Ben Noordhuis)
+
+* windows: reset brightness when reverting to default text color (Bert Belder)
+
+* npm: update to 1.1.1
+  - Update which, fstream, mkdirp, request, and rimraf
+  - Fix #2123 Set path properly for lifecycle scripts on windows
+  - Mark the root as seen, so we don't recurse into it. Fixes #1838. (Martin Cooper)
+
+
+2012.02.02, Version 0.6.10 (stable), 051908e023f87894fa68f5b64d0b99a19a7db01e
+
+* Update V8 to 3.6.6.20
+
+* Add npm msysgit bash shim to msi installer (isaacs)
+
+* buffers: fix intermittent out of bounds error (Ben Noordhuis)
+
+* buffers: honor length argument in base64 decoder (Ben Noordhuis)
+
+* windows: Fix path.exists regression (Bert Belder)
+
+* Make QueryString.parse run faster (Philip Tellis)
+
+* http: avoid freeing http-parser objects too early (koichik)
+
+* timers: add v0.4 compatibility hack (Ben Noordhuis)
+
+* Proper EPERM error code support (Igor Zinkovsky, Brandon Philips)
+
+* dgram: Implement udp multicast methods on windows (Bert Belder)
+
+
+2012.01.27, Version 0.6.9 (stable), f19e20d33f57c4d2853aaea7d2724d44f3b0012f
+
+* dgram: Bring back missing functionality for Unix (Dan VerWeire, Roman Shtylman, Ben Noordhuis)
+  - Note: Windows UDP support not yet complete.
+
+* http: Fix parser memory leak (koichik)
+
+* zlib: Fix #2365 crashes on invalid input (Nicolas LaCasse)
+
+* module: fix --debug-brk on symlinked scripts (Fedor Indutny)
+
+* Documentation Restyling (Matthew Fitzsimmons)
+
+* Update npm to 1.1.0-3 (isaacs)
+
+* Windows: fix regression in stat() calls to C:\ (Bert Belder)
+
+
+2012.01.19, Version 0.6.8 (stable), d18cebaf8a7ac701dabd71a3aa4eb0571db6a645
+
+* Update V8 to 3.6.6.19
+
+* Numeric key hash collision fix for V8 (Erik Corry, Fedor Indutny)
+
+* Add missing TTY key translations for F1-F5 on Windows (Brandon Benvie)
+
+* path.extname bugfix with . and .. paths (Bert Belder)
+
+* cluster: don't always kill the master on uncaughtException (Ben Noordhuis)
+
+* Update npm to 1.1.0-2 (isaacs)
+
+* typed arrays: set class name (Ben Noordhuis)
+
+* zlib binding cleanup (isaacs, Bert Belder)
+
+* dgram: use slab memory allocator (Michael Bernstein)
+
+* fix segfault #2473
+
+* #2521 60% improvement in fs.stat on Windows (Igor Zinkovsky)
+
+
+2012.01.06, Version 0.6.7 (stable), d5a189acef14a851287ee555f7a39431fe276e1c
+
+* V8 hash collision fix (Breaks MIPS) (Bert Belder, Erik Corry)
+
+* Upgrade V8 to 3.6.6.15
+
+* Upgrade npm to 1.1.0-beta-10 (isaacs)
+
+* many doc updates (Ben Noordhuis, Jeremy Martin, koichik, Dave Irvine,
+  Seong-Rak Choi, Shannen, Adam Malcontenti-Wilson, koichik)
+
+* Fix segfault in node_http_parser.cc
+
+* dgram, timers: fix memory leaks (Ben Noordhuis, Yoshihiro Kikuchi)
+
+* repl: fix repl.start not passing the `ignoreUndefined` arg (Damon Oehlman)
+
+* #1980: Socket.pause null reference when called on a closed Stream (koichik)
+
+* #2263: XMLHttpRequest piped in a writable file stream hang (koichik)
+
+* #2069: http resource leak (koichik)
+
+* buffer.readInt global pollution fix (Phil Sung)
+
+* timers: fix performance regression (Ben Noordhuis)
+
+* #2308, #2246: node swallows openssl error on request (koichik)
+
+* #2114: timers: remove _idleTimeout from item in .unenroll() (James Hartig)
+
+* #2379: debugger: Request backtrace w/o refs (Fedor Indutny)
+
+* simple DTrace ustack helper (Dave Pacheco)
+
+* crypto: rewrite HexDecode without snprintf (Roman Shtylman)
+
+* crypto: don't ignore DH init errors (Ben Noordhuis)
+
+
+2011.12.14, Version 0.6.6
 
 * npm update to 1.1.0-beta-4 (Isaac Z. Schlueter)
 

@@ -306,7 +306,7 @@ function addRemoteGit (u, parsed, name, cb_) {
   var tmp = path.join(npm.tmp, Date.now()+"-"+Math.random())
   mkdir(path.dirname(tmp), function (er) {
     if (er) return cb(er)
-    exec( "git", ["clone", u, tmp], null, false
+    exec( npm.config.get("git"), ["clone", u, tmp], null, false
         , function (er, code, stdout, stderr) {
       stdout = (stdout + "\n" + stderr).trim()
       if (er) {
@@ -314,7 +314,7 @@ function addRemoteGit (u, parsed, name, cb_) {
         return cb(er)
       }
       log.verbose(stdout, "git clone "+u)
-      exec( "git", ["checkout", co], null, false, tmp
+      exec( npm.config.get("git"), ["checkout", co], null, false, tmp
           , function (er, code, stdout, stderr) {
         stdout = (stdout + "\n" + stderr).trim()
         if (er) {
@@ -752,12 +752,14 @@ function addTmpTarball (tgz, name, cb) {
 }
 
 function addTmpTarball_ (tgz, name, uid, gid, cb) {
-  var contents = path.resolve(path.dirname(tgz))  // , "contents")
+  var contents = path.dirname(tgz)
   tar.unpack( tgz, path.resolve(contents, "package")
             , null, null
             , uid, gid
             , function (er) {
-    if (er) return log.er(cb, "couldn't unpack "+tgz+" to "+contents)(er)
+    if (er) {
+      return log.er(cb, "couldn't unpack "+tgz+" to "+contents)(er)
+    }
     fs.readdir(contents, function (er, folder) {
       if (er) return log.er(cb, "couldn't readdir "+contents)(er)
       log.verbose(folder, "tarball contents")
@@ -792,11 +794,14 @@ function unpack (pkg, ver, unpackTarget, dMode, fMode, uid, gid, cb) {
       log.error("Could not read data for "+pkg+"@"+ver)
       return cb(er)
     }
-    tar.unpack( path.join(npm.cache, pkg, ver, "package.tgz")
-             , unpackTarget
-             , dMode, fMode
-             , uid, gid
-             , cb )
+    npm.commands.unbuild([unpackTarget], function (er) {
+      if (er) return cb(er)
+      tar.unpack( path.join(npm.cache, pkg, ver, "package.tgz")
+                , unpackTarget
+                , dMode, fMode
+                , uid, gid
+                , cb )
+    })
   })
 }
 

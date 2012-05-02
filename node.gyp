@@ -1,10 +1,9 @@
 {
   'variables': {
-    'v8_use_snapshot': 'true',
+    'v8_use_snapshot%': 'true',
     # Turn off -Werror in V8
     # See http://codereview.chromium.org/8159015
     'werror': '',
-    'target_arch': 'ia32',
     'node_use_dtrace': 'false',
     'node_use_openssl%': 'true',
     'node_use_system_openssl%': 'false',
@@ -161,6 +160,7 @@
             'FD_SETSIZE=1024',
             # we need to use node's preferred "win32" rather than gyp's preferred "win"
             'PLATFORM="win32"',
+            '_UNICODE=1',
           ],
           'libraries': [ '-lpsapi.lib' ]
         },{ # POSIX

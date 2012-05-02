@@ -43,10 +43,12 @@ static void uv__fs_event_start(uv_fs_event_t* handle) {
              handle->fd,
              EV_LIBUV_KQUEUE_HACK);
   ev_io_start(handle->loop->ev, &handle->event_watcher);
+  ev_unref(handle->loop->ev);
 }
 
 
 static void uv__fs_event_stop(uv_fs_event_t* handle) {
+  ev_ref(handle->loop->ev);
   ev_io_stop(handle->loop->ev, &handle->event_watcher);
 }
 
@@ -66,11 +68,12 @@ static void uv__fs_event(EV_P_ ev_io* w, int revents) {
 
   handle->cb(handle, NULL, events, 0);
 
-  uv__fs_event_stop(handle);
+  if (handle->fd == -1)
+    return;
 
   /* File watcher operates in one-shot mode, re-arm it. */
-  if (handle->fd != -1)
-    uv__fs_event_start(handle);
+  uv__fs_event_stop(handle);
+  uv__fs_event_start(handle);
 }
 
 
@@ -89,6 +92,8 @@ int uv_fs_event_init(uv_loop_t* loop,
                      uv_fs_event_cb cb,
                      int flags) {
   int fd;
+
+  loop->counters.fs_event_init++;
 
   /* We don't support any flags yet. */
   assert(!flags);
@@ -129,6 +134,7 @@ int uv_fs_event_init(uv_loop_t* loop,
                      const char* filename,
                      uv_fs_event_cb cb,
                      int flags) {
+  loop->counters.fs_event_init++;
   uv__set_sys_error(loop, ENOSYS);
   return -1;
 }

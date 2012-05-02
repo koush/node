@@ -101,6 +101,7 @@ The following shorthands are parsed on the command-line:
 * `-v`: `--version`
 * `-h`, `-?`, `--help`, `-H`: `--usage`
 * `-s`, `--silent`: `--loglevel silent`
+* `-q`, `--quiet`: `--loglevel warn`
 * `-d`: `--loglevel info`
 * `-dd`, `--verbose`: `--loglevel verbose`
 * `-ddd`: `--loglevel silly`
@@ -278,6 +279,15 @@ Makes various commands more forceful.
 * skips cache when requesting from the registry.
 * prevents checks against clobbering non-npm files.
 
+### git
+
+* Default: `"git"`
+* Type: String
+
+The command to use for git commands.  If git is installed on the
+computer, but is not in the `PATH`, then set this to the full path to
+the git binary.
+
 ### global
 
 * Default: false
@@ -343,7 +353,7 @@ The value `npm init` should use by default for the package version.
 
 ### init.author.name
 
-* Default: "0.0.0"
+* Default: ""
 * Type: String
 
 The value `npm init` should use by default for the package author's name.
@@ -361,6 +371,17 @@ The value `npm init` should use by default for the package author's email.
 * Type: String
 
 The value `npm init` should use by default for the package author's homepage.
+
+### json
+
+* Default: false
+* Type: Boolean
+
+Whether or not to output JSON data, rather than the normal output.
+
+This feature is currently experimental, and the output data structures
+for many commands is either not implemented in JSON yet, or subject to
+change.  Only the output from `npm ls --json` is currently valid.
 
 ### link
 
@@ -669,6 +690,16 @@ this value.  Thus, the defaults are `0755` and `0644` respectively.
 * Type: boolean
 
 If true, output the npm version and exit successfully.
+
+Only relevant when specified explicitly on the command line.
+
+### versions
+
+* Default: false
+* Type: boolean
+
+If true, output the npm version as well as node's `process.versions`
+hash, and exit successfully.
 
 Only relevant when specified explicitly on the command line.
 

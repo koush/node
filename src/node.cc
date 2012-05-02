@@ -1046,6 +1046,10 @@ ssize_t DecodeBytes(v8::Handle<v8::Value> val, enum encoding encoding) {
     return -1;
   }
 
+  if (encoding == BINARY && Buffer::HasInstance(val)) {
+    return Buffer::Length(val->ToObject());
+  }
+
   Local<String> str = val->ToString();
 
   if (encoding == UTF8) return str->Utf8Length();
@@ -1256,76 +1260,6 @@ static Handle<Value> Cwd(const Arguments& args) {
 
   return scope.Close(cwd);
 }
-
-
-#ifdef _WIN32
-static Handle<Value> CwdForDrive(const Arguments& args) {
-  HandleScope scope;
-
-  if (args.Length() < 1) {
-    Local<Value> exception = Exception::Error(
-        String::New("process._cwdForDrive takes exactly 1 argument."));
-    return ThrowException(exception);
-  }
-
-  Local<String> driveLetter = args[0]->ToString();
-  if (driveLetter->Length() != 1) {
-    Local<Value> exception = Exception::Error(
-        String::New("Drive name should be 1 character."));
-    return ThrowException(exception);
-  }
-
-  char drive;
-
-  driveLetter->WriteAscii(&drive, 0, 1, 0);
-  if (drive >= 'a' && drive <= 'z') {
-    // Convert to uppercase
-    drive += 'A' - 'a';
-  } else if (drive < 'A' || drive > 'Z') {
-    // Not a letter
-    Local<Value> exception = Exception::Error(
-        String::New("Drive name should be a letter."));
-    return ThrowException(exception);
-  }
-
-  WCHAR env_key[] = L"=X:";
-  env_key[1] = (WCHAR) drive;
-
-  DWORD len = GetEnvironmentVariableW(env_key, NULL, 0);
-  if (len == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
-    // There is no current directory for that drive. Default to drive + ":\".
-    Local<String> cwd = String::Concat(String::New(&drive, 1),
-                                       String::New(":\\"));
-    return scope.Close(cwd);
-
-  } else if (len == 0) {
-    // Error
-    Local<Value> exception = Exception::Error(
-      String::New(winapi_strerror(GetLastError())));
-    return ThrowException(exception);
-  }
-
-  WCHAR* buffer = new WCHAR[len];
-  if (buffer == NULL) {
-    Local<Value> exception = Exception::Error(
-        String::New("Out of memory."));
-    return ThrowException(exception);
-  }
-
-  DWORD len2 = GetEnvironmentVariableW(env_key, buffer, len);
-  if (len2 == 0 || len2 >= len) {
-    // Error
-    delete[] buffer;
-    Local<Value> exception = Exception::Error(
-      String::New(winapi_strerror(GetLastError())));
-    return ThrowException(exception);
-  }
-
-  Local<String> cwd = String::New(reinterpret_cast<uint16_t*>(buffer), len2);
-  delete[] buffer;
-  return scope.Close(cwd);
-}
-#endif
 
 
 static Handle<Value> Umask(const Arguments& args) {
@@ -1679,7 +1613,7 @@ Handle<Value> DLOpen(const v8::Arguments& args) {
       if (err.code == UV_ENOENT)
         message = "Module entry point not found.";
       else
-        message = "Out of memory.";
+        message = uv_strerror(err);
 
       return ThrowException(Exception::Error(String::New(message)));
     }
@@ -1865,12 +1799,28 @@ static void ProcessTitleSetter(Local<String> property,
 
 static Handle<Value> EnvGetter(Local<String> property,
                                const AccessorInfo& info) {
+  HandleScope scope;
+#ifdef __POSIX__
   String::Utf8Value key(property);
   const char* val = getenv(*key);
   if (val) {
-    HandleScope scope;
     return scope.Close(String::New(val));
   }
+#else  // _WIN32
+  String::Value key(property);
+  WCHAR buffer[32767]; // The maximum size allowed for environment variables.
+  DWORD result = GetEnvironmentVariableW(reinterpret_cast<WCHAR*>(*key),
+                                         buffer,
+                                         ARRAY_SIZE(buffer));
+  // If result >= sizeof buffer the buffer was too small. That should never
+  // happen. If result == 0 and result != ERROR_SUCCESS the variable was not
+  // not found.
+  if ((result > 0 || GetLastError() == ERROR_SUCCESS) &&
+      result < ARRAY_SIZE(buffer)) {
+    return scope.Close(String::New(reinterpret_cast<uint16_t*>(buffer), result));
+  }
+#endif
+  // Not found
   return Undefined();
 }
 
@@ -1879,66 +1829,82 @@ static Handle<Value> EnvSetter(Local<String> property,
                                Local<Value> value,
                                const AccessorInfo& info) {
   HandleScope scope;
+#ifdef __POSIX__
   String::Utf8Value key(property);
   String::Utf8Value val(value);
-
-#ifdef __POSIX__
   setenv(*key, *val, 1);
-#else  // __WIN32__
-  int n = key.length() + val.length() + 2;
-  char* pair = new char[n];
-  snprintf(pair, n, "%s=%s", *key, *val);
-  int r = _putenv(pair);
-  if (r) {
-    fprintf(stderr, "error putenv: '%s'\n", pair);
+#else  // _WIN32
+  String::Value key(property);
+  String::Value val(value);
+  WCHAR* key_ptr = reinterpret_cast<WCHAR*>(*key);
+  // Environment variables that start with '=' are read-only.
+  if (key_ptr[0] != L'=') {
+    SetEnvironmentVariableW(key_ptr, reinterpret_cast<WCHAR*>(*val));
   }
-  delete [] pair;
 #endif
-
-  return value;
+  // Whether it worked or not, always return rval.
+  return scope.Close(value);
 }
 
 
 static Handle<Integer> EnvQuery(Local<String> property,
                                 const AccessorInfo& info) {
+  HandleScope scope;
+#ifdef __POSIX__
   String::Utf8Value key(property);
   if (getenv(*key)) {
-    HandleScope scope;
     return scope.Close(Integer::New(None));
   }
-  return Handle<Integer>();
+#else  // _WIN32
+  String::Value key(property);
+  WCHAR* key_ptr = reinterpret_cast<WCHAR*>(*key);
+  if (GetEnvironmentVariableW(key_ptr, NULL, 0) > 0 ||
+      GetLastError() == ERROR_SUCCESS) {
+    if (key_ptr[0] == L'=') {
+      // Environment variables that start with '=' are hidden and read-only.
+      return scope.Close(Integer::New(v8::ReadOnly ||
+                                      v8::DontDelete ||
+                                      v8::DontEnum));
+    } else {
+      return scope.Close(Integer::New(None));
+    }
+  }
+#endif
+  // Not found
+  return scope.Close(Handle<Integer>());
 }
 
 
 static Handle<Boolean> EnvDeleter(Local<String> property,
                                   const AccessorInfo& info) {
   HandleScope scope;
-
-  String::Utf8Value key(property);
-
-  if (getenv(*key)) {
 #ifdef __POSIX__
-    unsetenv(*key);	// prototyped as `void unsetenv(const char*)` on some platforms
+  String::Utf8Value key(property);
+  // prototyped as `void unsetenv(const char*)` on some platforms
+  if (unsetenv(*key) < 0) {
+    // Deletion failed. Return true if the key wasn't there in the first place,
+    // false if it is still there.
+    return scope.Close(Boolean::New(getenv(*key) == NULL));
+  };
 #else
-    int n = key.length() + 2;
-    char* pair = new char[n];
-    snprintf(pair, n, "%s=", *key);
-    int r = _putenv(pair);
-    if (r) {
-      fprintf(stderr, "error unsetenv: '%s'\n", pair);
-    }
-    delete [] pair;
-#endif
-    return True();
+  String::Value key(property);
+  WCHAR* key_ptr = reinterpret_cast<WCHAR*>(*key);
+  if (key_ptr[0] == L'=' || !SetEnvironmentVariableW(key_ptr, NULL)) {
+    // Deletion failed. Return true if the key wasn't there in the first place,
+    // false if it is still there.
+    bool rv = GetEnvironmentVariableW(key_ptr, NULL, NULL) == 0 &&
+              GetLastError() != ERROR_SUCCESS;
+    return scope.Close(Boolean::New(rv));
   }
-
-  return False();
+#endif
+  // It worked
+  return v8::True();
 }
 
 
 static Handle<Array> EnvEnumerator(const AccessorInfo& info) {
   HandleScope scope;
-
+#ifdef __POSIX__
   int size = 0;
   while (environ[size]) size++;
 
@@ -1950,7 +1916,32 @@ static Handle<Array> EnvEnumerator(const AccessorInfo& info) {
     const int length = s ? s - var : strlen(var);
     env->Set(i, String::New(var, length));
   }
-
+#else  // _WIN32
+  WCHAR* environment = GetEnvironmentStringsW();
+  if (environment == NULL) {
+    // This should not happen.
+    return scope.Close(Handle<Array>());
+  }
+  Local<Array> env = Array::New();
+  WCHAR* p = environment;
+  int i = 0;
+  while (*p != NULL) {
+    WCHAR *s;
+    if (*p == L'=') {
+      // If the key starts with '=' it is a hidden environment variable.
+      p += wcslen(p) + 1;
+      continue;
+    } else {
+      s = wcschr(p, L'=');
+    }
+    if (!s) {
+      s = p + wcslen(p);
+    }
+    env->Set(i++, String::New(reinterpret_cast<uint16_t*>(p), s - p));
+    p = s + wcslen(s) + 1;
+  }
+  FreeEnvironmentStringsW(environment);
+#endif
   return scope.Close(env);
 }
 
@@ -2086,10 +2077,6 @@ Handle<Object> SetupProcessObject(int argc, char *argv[]) {
   NODE_SET_METHOD(process, "reallyExit", Exit);
   NODE_SET_METHOD(process, "chdir", Chdir);
   NODE_SET_METHOD(process, "cwd", Cwd);
-
-#ifdef _WIN32
-  NODE_SET_METHOD(process, "_cwdForDrive", CwdForDrive);
-#endif
 
   NODE_SET_METHOD(process, "umask", Umask);
 
@@ -2374,13 +2361,14 @@ DWORD WINAPI EnableDebugThreadProc(void* arg) {
 }
 
 
-static int GetDebugSignalHandlerMappingName(DWORD pid, char* buf, size_t buf_len) {
-  return snprintf(buf, buf_len, "node-debug-handler-%u", pid);
+static int GetDebugSignalHandlerMappingName(DWORD pid, wchar_t* buf,
+    size_t buf_len) {
+  return _snwprintf(buf, buf_len, L"node-debug-handler-%u", pid);
 }
 
 
 static int RegisterDebugSignalHandler() {
-  char mapping_name[32];
+  wchar_t mapping_name[32];
   HANDLE mapping_handle;
   DWORD pid;
   LPTHREAD_START_ROUTINE* handler;
@@ -2389,11 +2377,11 @@ static int RegisterDebugSignalHandler() {
 
   if (GetDebugSignalHandlerMappingName(pid,
                                        mapping_name,
-                                       sizeof mapping_name) < 0) {
+                                       ARRAY_SIZE(mapping_name)) < 0) {
     return -1;
   }
 
-  mapping_handle = CreateFileMappingA(INVALID_HANDLE_VALUE,
+  mapping_handle = CreateFileMappingW(INVALID_HANDLE_VALUE,
                                       NULL,
                                       PAGE_READWRITE,
                                       0,
@@ -2403,11 +2391,12 @@ static int RegisterDebugSignalHandler() {
     return -1;
   }
 
-  handler = (LPTHREAD_START_ROUTINE*) MapViewOfFile(mapping_handle,
-                                                    FILE_MAP_ALL_ACCESS,
-                                                    0,
-                                                    0,
-                                                    sizeof *handler);
+  handler = reinterpret_cast<LPTHREAD_START_ROUTINE*>(
+      MapViewOfFile(mapping_handle,
+                    FILE_MAP_ALL_ACCESS,
+                    0,
+                    0,
+                    sizeof *handler));
   if (handler == NULL) {
     CloseHandle(mapping_handle);
     return -1;
@@ -2425,10 +2414,10 @@ static Handle<Value> DebugProcess(const Arguments& args) {
   HandleScope scope;
   Handle<Value> rv = Undefined();
   DWORD pid;
-  HANDLE process_l = NULL;
+  HANDLE process = NULL;
   HANDLE thread = NULL;
   HANDLE mapping = NULL;
-  char mapping_name[32];
+  wchar_t mapping_name[32];
   LPTHREAD_START_ROUTINE* handler = NULL;
 
   if (args.Length() != 1) {
@@ -2438,40 +2427,42 @@ static Handle<Value> DebugProcess(const Arguments& args) {
 
   pid = (DWORD) args[0]->IntegerValue();
 
-  process_l = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
+  process = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
                             PROCESS_VM_OPERATION | PROCESS_VM_WRITE |
                             PROCESS_VM_READ,
                         FALSE,
                         pid);
-  if (process_l == NULL) {
+  if (process == NULL) {
     rv = ThrowException(WinapiErrnoException(GetLastError(), "OpenProcess"));
     goto out;
   }
 
   if (GetDebugSignalHandlerMappingName(pid,
                                        mapping_name,
-                                       sizeof mapping_name) < 0) {
+                                       ARRAY_SIZE(mapping_name)) < 0) {
     rv = ThrowException(ErrnoException(errno, "sprintf"));
     goto out;
   }
 
-  mapping = OpenFileMapping(FILE_MAP_READ, FALSE, mapping_name);
+  mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, mapping_name);
   if (mapping == NULL) {
-    rv = ThrowException(WinapiErrnoException(GetLastError(), "sprintf"));
+    rv = ThrowException(WinapiErrnoException(GetLastError(),
+                                             "OpenFileMappingW"));
     goto out;
   }
 
-  handler = (LPTHREAD_START_ROUTINE*) MapViewOfFile(mapping,
-                                                    FILE_MAP_READ,
-                                                    0,
-                                                    0,
-                                                    sizeof *handler);
+  handler = reinterpret_cast<LPTHREAD_START_ROUTINE*>(
+      MapViewOfFile(mapping,
+                    FILE_MAP_READ,
+                    0,
+                    0,
+                    sizeof *handler));
   if (handler == NULL || *handler == NULL) {
     rv = ThrowException(WinapiErrnoException(GetLastError(), "MapViewOfFile"));
     goto out;
   }
 
-  thread = CreateRemoteThread(process_l,
+  thread = CreateRemoteThread(process,
                               NULL,
                               0,
                               *handler,
@@ -2492,8 +2483,8 @@ static Handle<Value> DebugProcess(const Arguments& args) {
   }
 
  out:
-  if (process_l != NULL) {
-   CloseHandle(process_l);
+  if (process != NULL) {
+   CloseHandle(process);
   }
   if (thread != NULL) {
     CloseHandle(thread);

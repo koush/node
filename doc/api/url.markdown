@@ -1,4 +1,4 @@
-## URL
+# URL
 
 This module has utilities for URL resolution and parsing.
 Call `require('url')` to use it.
@@ -45,18 +45,19 @@ string will not be in the parsed object. Examples are shown for the URL
 
 The following methods are provided by the URL module:
 
-### url.parse(urlStr, parseQueryString=false, slashesDenoteHost=false)
+## url.parse(urlStr, [parseQueryString], [slashesDenoteHost])
 
 Take a URL string, and return an object.
 
 Pass `true` as the second argument to also parse
 the query string using the `querystring` module.
+Defaults to `false`.
 
 Pass `true` as the third argument to treat `//foo/bar` as
 `{ host: 'foo', pathname: '/bar' }` rather than
-`{ pathname: '//foo/bar' }`.
+`{ pathname: '//foo/bar' }`. Defaults to `false`.
 
-### url.format(urlObj)
+## url.format(urlObj)
 
 Take a parsed URL object, and return a formatted URL string.
 
@@ -74,6 +75,6 @@ Take a parsed URL object, and return a formatted URL string.
 * `search` is treated the same with or without the leading `?` (question mark)
 * `hash` is treated the same with or without the leading `#` (pound sign, anchor)
 
-### url.resolve(from, to)
+## url.resolve(from, to)
 
 Take a base URL, and a href URL, and resolve them as a browser would for an anchor tag.

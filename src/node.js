@@ -280,8 +280,9 @@
     process.__defineGetter__('stdout', function() {
       if (stdout) return stdout;
       stdout = createWritableStdioStream(1);
-      stdout.end = stdout.destroy = stdout.destroySoon = function() {
-        throw new Error('process.stdout cannot be closed');
+      stdout.destroy = stdout.destroySoon = function(er) {
+        er = er || new Error('process.stdout cannot be closed.');
+        stdout.emit('error', er);
       };
       return stdout;
     });
@@ -289,8 +290,9 @@
     process.__defineGetter__('stderr', function() {
       if (stderr) return stderr;
       stderr = createWritableStdioStream(2);
-      stderr.end = stderr.destroy = stderr.destroySoon = function() {
-        throw new Error('process.stderr cannot be closed');
+      stderr.destroy = stderr.destroySoon = function(er) {
+        er = er || new Error('process.stderr cannot be closed.');
+        stderr.emit('error', er);
       };
       return stderr;
     });
@@ -325,6 +327,10 @@
 
       // For supporting legacy API we put the FD here.
       stdin.fd = fd;
+
+      // stdin starts out life in a paused state, but node doesn't
+      // know yet.  Call pause() explicitly to unref() it.
+      stdin.pause();
 
       return stdin;
     });

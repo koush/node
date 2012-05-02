@@ -1,4 +1,4 @@
-## Appendix 1 - Third Party Modules
+# Appendix 1 - Third Party Modules
 
 There are many third party modules for Node. At the time of writing, August
 2010, the master repository of modules is
@@ -38,7 +38,7 @@ elsewhere.
 - [ncurses](https://github.com/mscdex/node-ncurses)
 
 - Testing/TDD/BDD: [vows](http://vowsjs.org/),
-  [expresso](https://github.com/visionmedia/expresso),
+  [mocha](https://github.com/visionmedia/mocha),
   [mjsunit.runner](https://github.com/tmpvar/mjsunit.runner)
 
 Patches to this list are welcome.

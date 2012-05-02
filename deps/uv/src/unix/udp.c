@@ -42,6 +42,10 @@ static int uv__udp_send(uv_udp_send_t* req, uv_udp_t* handle, uv_buf_t bufs[],
 static void uv__udp_watcher_start(uv_udp_t* handle, ev_io* w) {
   int flags;
 
+  if (ev_is_active(w)) {
+    return;
+  }
+
   assert(w == &handle->read_watcher
       || w == &handle->write_watcher);
 
@@ -51,17 +55,23 @@ static void uv__udp_watcher_start(uv_udp_t* handle, ev_io* w) {
   ev_set_cb(w, uv__udp_io);
   ev_io_set(w, handle->fd, flags);
   ev_io_start(handle->loop->ev, w);
+  ev_unref(handle->loop->ev);
 }
 
 
 void uv__udp_watcher_stop(uv_udp_t* handle, ev_io* w) {
   int flags;
 
+  if (!ev_is_active(w)) {
+    return;
+  }
+
   assert(w == &handle->read_watcher
       || w == &handle->write_watcher);
 
   flags = (w == &handle->read_watcher ? EV_READ : EV_WRITE);
 
+  ev_ref(handle->loop->ev);
   ev_io_stop(handle->loop->ev, w);
   ev_io_set(w, -1, flags);
   ev_set_cb(w, NULL);
@@ -324,6 +334,28 @@ static int uv__bind(uv_udp_t* handle,
     goto out;
   }
 
+  yes = 1;
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == -1) {
+    uv__set_sys_error(handle->loop, errno);
+    goto out;
+  }
+
+  /* On the BSDs, SO_REUSEADDR lets you reuse an address that's in the TIME_WAIT
+   * state (i.e. was until recently tied to a socket) while SO_REUSEPORT lets
+   * multiple processes bind to the same address. Yes, it's something of a
+   * misnomer but then again, SO_REUSEADDR was already taken.
+   *
+   * None of the above applies to Linux: SO_REUSEADDR implies SO_REUSEPORT on
+   * Linux and hence it does not have SO_REUSEPORT at all.
+   */
+#ifdef SO_REUSEPORT
+  yes = 1;
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof yes) == -1) {
+    uv__set_sys_error(handle->loop, errno);
+    goto out;
+  }
+#endif
+
   if (flags & UV_UDP_IPV6ONLY) {
 #ifdef IPV6_V6ONLY
     yes = 1;
@@ -332,7 +364,7 @@ static int uv__bind(uv_udp_t* handle,
       goto out;
     }
 #else
-    uv__set_sys_error((uv_handle_t*)handle, ENOTSUP);
+    uv__set_sys_error(handle->loop, ENOTSUP);
     goto out;
 #endif
   }
@@ -401,8 +433,7 @@ static int uv__udp_send(uv_udp_send_t* req,
   if (uv__udp_maybe_deferred_bind(handle, addr->sa_family))
     return -1;
 
-  /* Don't use uv__req_init(), it zeroes the data field. */
-  handle->loop->counters.req_init++;
+  uv__req_init(handle->loop, (uv_req_t*)req);
 
   memcpy(&req->addr, addr, addrlen);
   req->addrlen = addrlen;
@@ -495,8 +526,55 @@ int uv_udp_set_membership(uv_udp_t* handle, const char* multicast_addr,
 }
 
 
-int uv_udp_getsockname(uv_udp_t* handle, struct sockaddr* name,
-    int* namelen) {
+#define X(name, level, option)                                                \
+  int uv_udp_set_##name(uv_udp_t* handle, int flag) {                         \
+    if (setsockopt(handle->fd, level, option, &flag, sizeof(flag))) {         \
+      uv__set_sys_error(handle->loop, errno);                                 \
+      return -1;                                                              \
+    }                                                                         \
+    return 0;                                                                 \
+  }
+
+X(broadcast, SOL_SOCKET, SO_BROADCAST)
+X(ttl, IPPROTO_IP, IP_TTL)
+
+#undef X
+
+
+static int uv__setsockopt_maybe_char(uv_udp_t* handle, int option, int val) {
+#if __sun
+  char arg = val;
+#else
+  int arg = val;
+#endif
+
+#if __sun
+  if (val < 0 || val > 255) {
+    uv__set_sys_error(handle->loop, EINVAL);
+    return -1;
+  }
+#endif
+
+  if (setsockopt(handle->fd, IPPROTO_IP, option, &arg, sizeof(arg))) {
+    uv__set_sys_error(handle->loop, errno);
+    return -1;
+  }
+
+  return 0;
+}
+
+
+int uv_udp_set_multicast_ttl(uv_udp_t* handle, int ttl) {
+  return uv__setsockopt_maybe_char(handle, IP_MULTICAST_TTL, ttl);
+}
+
+
+int uv_udp_set_multicast_loop(uv_udp_t* handle, int on) {
+  return uv__setsockopt_maybe_char(handle, IP_MULTICAST_LOOP, on);
+}
+
+
+int uv_udp_getsockname(uv_udp_t* handle, struct sockaddr* name, int* namelen) {
   socklen_t socklen;
   int saved_errno;
   int rv = 0;

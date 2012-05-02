@@ -36,6 +36,8 @@ var fs = require("graceful-fs")
   , nopt = require("nopt")
   , ini = require("ini")
   , ProtoList = require("proto-list")
+  , mkdir = require("mkdirp")
+  , npm = require("../npm.js")
 
   , log = require("./log.js")
   , configDefs = require("./config-defs.js")
@@ -118,44 +120,21 @@ function resolveConfigs (cli, cb_) {
         if (er) conf = {}
         cl.push(conf)
         cl.push(dc)
-        setUser(cl, dc, thenValidate(cl, cb))
+        validate(cl)
+        cb()
       })
     })
   })
 }
 
-function thenValidate (cl, cb) { return function (er) {
-  if (er) return cb(er)
-
+function validate (cl) {
   // warn about invalid configs at every level.
   cl.list.forEach(function (conf, level) {
     // clean(data, types, typeDefs)
     nopt.clean(conf, configDefs.types)
   })
-
-  cb()
-}}
-
-function setUser (cl, dc, cb) {
-  // If global, leave it as-is.
-  // If not global, then set the user to the owner of the prefix folder.
-  // Just set the default, so it can be overridden.
-  //console.error("setUser "+cl.get("global")+" "+ cb.toString())
-  if (cl.get("global")) return cb()
-  if (process.env.SUDO_UID) {
-    //console.error("uid="+process.env.SUDO_UID)
-    dc.user = +(process.env.SUDO_UID)
-    return cb()
-  }
-  //console.error("prefix="+cl.get("prefix"))
-  fs.stat(path.resolve(cl.get("prefix")), function (er, st) {
-    if (er) {
-      return log.er(cb, "prefix directory not found")(er)
-    }
-    dc.user = st.uid
-    return cb()
-  })
 }
+
 
 function parseEnv (env) {
   var conf = {}
@@ -177,7 +156,7 @@ function unParseField (f, k) {
   if (isPath) {
     if (typeof process.env.HOME !== 'undefined') {
       if (process.env.HOME.substr(-1) === "/") {
-        process.env.HOME = process.env.HOME(0, process.env.HOME.length-1)
+        process.env.HOME = process.env.HOME.slice(0, process.env.HOME.length-1)
       }
       if (f.indexOf(process.env.HOME) === 0) {
         f = "~"+f.substr(process.env.HOME.length)
@@ -205,7 +184,8 @@ function parseField (f, k, emptyIsFalse) {
   f = envReplace(f)
 
   if (isPath) {
-    if (f.substr(0, 2) === "~/" && process.env.HOME) {
+    var homePattern = process.platform === "win32" ? /^~(\/|\\)/ : /^~\//
+    if (f.match(homePattern) && process.env.HOME) {
       f = path.resolve(process.env.HOME, f.substr(2))
     }
     f = path.resolve(f)
@@ -343,8 +323,14 @@ function envReplace (f) {
   if (typeof f !== "string" || !f) return f
 
   // replace any ${ENV} values with the appropriate environ.
-  return f.replace(/\$\{([^}]+)\}/g, function (orig, name, i, s) {
-    return process.env[name] || orig
+  var envExpr = /(\\*)\$\{([^}]+)\}/g
+  return f.replace(envExpr, function (orig, esc, name, i, s) {
+    esc = esc.length && esc.length % 2
+    if (esc) return orig
+    if (undefined === process.env[name]) {
+      throw new Error("Failed to replace env in config: "+orig)
+    }
+    return process.env[name]
   })
 }
 

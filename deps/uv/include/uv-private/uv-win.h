@@ -388,7 +388,7 @@ RB_HEAD(uv_timer_tree_s, uv_timer_s);
 #define UV_FS_PRIVATE_FIELDS              \
   wchar_t* pathw;                         \
   int flags;                              \
-  int last_error;                         \
+  DWORD sys_errno_;                       \
   struct _stati64 stat;                   \
   void* arg0;                             \
   union {                                 \
@@ -414,7 +414,7 @@ RB_HEAD(uv_timer_tree_s, uv_timer_s);
   uv_fs_event_cb cb;                      \
   wchar_t* filew;                         \
   wchar_t* short_filew;                   \
-  int is_path_dir;                        \
+  wchar_t* dirw;                          \
   char* buffer;
 
 int uv_utf16_to_utf8(const wchar_t* utf16Buffer, size_t utf16Size,

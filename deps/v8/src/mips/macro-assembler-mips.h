@@ -266,6 +266,7 @@ class MacroAssembler: public Assembler {
                               Register scratch,
                               Label* miss);
 
+  void GetNumberHash(Register reg0, Register scratch);
 
   void LoadFromNumberDictionary(Label* miss,
                                 Register elements,
@@ -671,6 +672,11 @@ class MacroAssembler: public Assembler {
   void DebugBreak();
 #endif
 
+  void InitializeRootRegister() {
+    ExternalReference roots_address =
+        ExternalReference::roots_address(isolate());
+    li(kRootRegister, Operand(roots_address));
+  }
 
   // -------------------------------------------------------------------------
   // Exception handling.

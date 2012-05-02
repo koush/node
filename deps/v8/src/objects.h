@@ -986,7 +986,8 @@ class Smi: public Object {
   void SmiVerify();
 #endif
 
-  static const int kMinValue = (-1 << (kSmiValueSize - 1));
+  static const int kMinValue =
+      (static_cast<unsigned int>(-1)) << (kSmiValueSize - 1);
   static const int kMaxValue = -(kMinValue + 1);
 
  private:
@@ -1541,7 +1542,7 @@ class JSObject: public JSReceiver {
   bool HasFastArgumentsElements();
   bool HasDictionaryArgumentsElements();
   inline bool AllowsSetElementsLength();
-  inline NumberDictionary* element_dictionary();  // Gets slow elements.
+  inline SeededNumberDictionary* element_dictionary();  // Gets slow elements.
 
   // Requires: HasFastElements().
   MUST_USE_RESULT inline MaybeObject* EnsureWritableFastElements();
@@ -1902,8 +1903,6 @@ class JSObject: public JSReceiver {
       PropertyNormalizationMode mode,
       int expected_additional_properties);
 
-  // Convert and update the elements backing store to be a NumberDictionary
-  // dictionary.  Returns the backing after conversion.
   MUST_USE_RESULT MaybeObject* NormalizeElements();
 
   MUST_USE_RESULT MaybeObject* UpdateMapCodeCache(String* name, Code* code);
@@ -2172,7 +2171,7 @@ class FixedArray: public FixedArrayBase {
   // Maximal allowed size, in bytes, of a single FixedArray.
   // Prevents overflowing size computations, as well as extreme memory
   // consumption.
-  static const int kMaxSize = 512 * MB;
+  static const int kMaxSize = 128 * MB * kPointerSize;
   // Maximally allowed length of a FixedArray.
   static const int kMaxLength = (kMaxSize - kHeaderSize) / kPointerSize;
 
@@ -2221,7 +2220,7 @@ class FixedDoubleArray: public FixedArrayBase {
  public:
   inline void Initialize(FixedArray* from);
   inline void Initialize(FixedDoubleArray* from);
-  inline void Initialize(NumberDictionary* from);
+  inline void Initialize(SeededNumberDictionary* from);
 
   // Setter and getter for elements.
   inline double get_scalar(int index);
@@ -2514,9 +2513,42 @@ class DescriptorArray: public FixedArray {
 // beginning of the backing storage that can be used for non-element
 // information by subclasses.
 
+template<typename Key>
+class BaseShape {
+ public:
+  static const bool UsesSeed = false;
+  static uint32_t Hash(Key key) { return 0; }
+  static uint32_t SeededHash(Key key, uint32_t seed) {
+    ASSERT(UsesSeed);
+    return Hash(key);
+  }
+  static uint32_t HashForObject(Key key, Object* object) { return 0; }
+  static uint32_t SeededHashForObject(Key key, uint32_t seed, Object* object) {
+    // Won't be called if UsesSeed isn't overridden by child class.
+    return HashForObject(key, object);
+  }
+};
+
 template<typename Shape, typename Key>
 class HashTable: public FixedArray {
  public:
+  // Wrapper methods
+  inline uint32_t Hash(Key key) {
+    if (Shape::UsesSeed) {
+      return Shape::SeededHash(key, GetHeap()->HashSeed());
+    } else {
+      return Shape::Hash(key);
+    }
+  }
+
+  inline uint32_t HashForObject(Key key, Object* object) {
+    if (Shape::UsesSeed) {
+      return Shape::SeededHashForObject(key, GetHeap()->HashSeed(), object);
+    } else {
+      return Shape::HashForObject(key, object);
+    }
+  }
+
   // Returns the number of elements in the hash table.
   int NumberOfElements() {
     return Smi::cast(get(kNumberOfElementsIndex))->value();
@@ -2658,7 +2690,6 @@ class HashTable: public FixedArray {
 };
 
 
-
 // HashTableKey is an abstract superclass for virtual key behavior.
 class HashTableKey {
  public:
@@ -2675,7 +2706,8 @@ class HashTableKey {
   virtual ~HashTableKey() {}
 };
 
-class SymbolTableShape {
+
+class SymbolTableShape : public BaseShape<HashTableKey*> {
  public:
   static inline bool IsMatch(HashTableKey* key, Object* value) {
     return key->IsMatch(value);
@@ -2734,7 +2766,7 @@ class SymbolTable: public HashTable<SymbolTableShape, HashTableKey*> {
 };
 
 
-class MapCacheShape {
+class MapCacheShape : public BaseShape<HashTableKey*> {
  public:
   static inline bool IsMatch(HashTableKey* key, Object* value) {
     return key->IsMatch(value);
@@ -2890,7 +2922,7 @@ class Dictionary: public HashTable<Shape, Key> {
 };
 
 
-class StringDictionaryShape {
+class StringDictionaryShape : public BaseShape<String*> {
  public:
   static inline bool IsMatch(String* key, Object* other);
   static inline uint32_t Hash(String* key);
@@ -2923,23 +2955,42 @@ class StringDictionary: public Dictionary<StringDictionaryShape, String*> {
 };
 
 
-class NumberDictionaryShape {
+class NumberDictionaryShape : public BaseShape<uint32_t> {
  public:
   static inline bool IsMatch(uint32_t key, Object* other);
-  static inline uint32_t Hash(uint32_t key);
-  static inline uint32_t HashForObject(uint32_t key, Object* object);
   MUST_USE_RESULT static inline MaybeObject* AsObject(uint32_t key);
-  static const int kPrefixSize = 2;
   static const int kEntrySize = 3;
   static const bool kIsEnumerable = false;
 };
 
 
-class NumberDictionary: public Dictionary<NumberDictionaryShape, uint32_t> {
+class SeededNumberDictionaryShape : public NumberDictionaryShape {
  public:
-  static NumberDictionary* cast(Object* obj) {
+  static const bool UsesSeed = true;
+  static const int kPrefixSize = 2;
+
+  static inline uint32_t SeededHash(uint32_t key, uint32_t seed);
+  static inline uint32_t SeededHashForObject(uint32_t key,
+                                             uint32_t seed,
+                                             Object* object);
+};
+
+
+class UnseededNumberDictionaryShape : public NumberDictionaryShape {
+ public:
+  static const int kPrefixSize = 0;
+
+  static inline uint32_t Hash(uint32_t key);
+  static inline uint32_t HashForObject(uint32_t key, Object* object);
+};
+
+
+class SeededNumberDictionary
+    : public Dictionary<SeededNumberDictionaryShape, uint32_t> {
+ public:
+  static SeededNumberDictionary* cast(Object* obj) {
     ASSERT(obj->IsDictionary());
-    return reinterpret_cast<NumberDictionary*>(obj);
+    return reinterpret_cast<SeededNumberDictionary*>(obj);
   }
 
   // Type specific at put (default NONE attributes is used when adding).
@@ -2978,7 +3029,24 @@ class NumberDictionary: public Dictionary<NumberDictionaryShape, uint32_t> {
 };
 
 
-class ObjectHashTableShape {
+class UnseededNumberDictionary
+    : public Dictionary<UnseededNumberDictionaryShape, uint32_t> {
+ public:
+  static UnseededNumberDictionary* cast(Object* obj) {
+    ASSERT(obj->IsDictionary());
+    return reinterpret_cast<UnseededNumberDictionary*>(obj);
+  }
+
+  // Type specific at put (default NONE attributes is used when adding).
+  MUST_USE_RESULT MaybeObject* AtNumberPut(uint32_t key, Object* value);
+  MUST_USE_RESULT MaybeObject* AddNumberEntry(uint32_t key, Object* value);
+
+  // Set an existing entry or add a new one if needed.
+  MUST_USE_RESULT MaybeObject* Set(uint32_t key, Object* value);
+};
+
+
+class ObjectHashTableShape : public BaseShape<Object*> {
  public:
   static inline bool IsMatch(JSObject* key, Object* other);
   static inline uint32_t Hash(JSObject* key);
@@ -3468,7 +3536,8 @@ class DeoptimizationInputData: public FixedArray {
   static const int kAstIdOffset = 0;
   static const int kTranslationIndexOffset = 1;
   static const int kArgumentsStackHeightOffset = 2;
-  static const int kDeoptEntrySize = 3;
+  static const int kPcOffset = 3;
+  static const int kDeoptEntrySize = 4;
 
   // Simple element accessors.
 #define DEFINE_ELEMENT_ACCESSORS(name, type)      \
@@ -3504,6 +3573,7 @@ class DeoptimizationInputData: public FixedArray {
   DEFINE_ENTRY_ACCESSORS(AstId, Smi)
   DEFINE_ENTRY_ACCESSORS(TranslationIndex, Smi)
   DEFINE_ENTRY_ACCESSORS(ArgumentsStackHeight, Smi)
+  DEFINE_ENTRY_ACCESSORS(Pc, Smi)
 
 #undef DEFINE_ENTRY_ACCESSORS
 
@@ -5548,7 +5618,7 @@ class JSRegExp: public JSObject {
 };
 
 
-class CompilationCacheShape {
+class CompilationCacheShape : public BaseShape<HashTableKey*> {
  public:
   static inline bool IsMatch(HashTableKey* key, Object* value) {
     return key->IsMatch(value);
@@ -5648,7 +5718,7 @@ class CodeCache: public Struct {
 };
 
 
-class CodeCacheHashTableShape {
+class CodeCacheHashTableShape : public BaseShape<HashTableKey*> {
  public:
   static inline bool IsMatch(HashTableKey* key, Object* value) {
     return key->IsMatch(value);
@@ -5739,7 +5809,7 @@ enum RobustnessFlag {ROBUST_STRING_TRAVERSAL, FAST_STRING_TRAVERSAL};
 
 class StringHasher {
  public:
-  explicit inline StringHasher(int length);
+  explicit inline StringHasher(int length, uint32_t seed);
 
   // Returns true if the hash of this string can be computed without
   // looking at the contents.
@@ -5770,6 +5840,11 @@ class StringHasher {
   // value is represented decimal value.
   static uint32_t MakeArrayIndexHash(uint32_t value, int length);
 
+  // No string is allowed to have a hash of zero.  That value is reserved
+  // for internal properties.  If the hash calculation yields zero then we
+  // use 27 instead.
+  static const int kZeroHash = 27;
+
  private:
   uint32_t array_index() {
     ASSERT(is_array_index());
@@ -5790,7 +5865,9 @@ class StringHasher {
 
 // Calculates string hash.
 template <typename schar>
-inline uint32_t HashSequentialString(const schar* chars, int length);
+inline uint32_t HashSequentialString(const schar* chars,
+                                     int length,
+                                     uint32_t seed);
 
 
 // The characteristics of a string are stored in its map.  Retrieving these
@@ -6012,7 +6089,8 @@ class String: public HeapObject {
   inline uint32_t Hash();
 
   static uint32_t ComputeHashField(unibrow::CharacterStream* buffer,
-                                   int length);
+                                   int length,
+                                   uint32_t seed);
 
   static bool ComputeArrayIndex(unibrow::CharacterStream* buffer,
                                 uint32_t* index,
@@ -6076,6 +6154,10 @@ class String: public HeapObject {
 
   // Shift constant retrieving hash code from hash field.
   static const int kHashShift = kNofHashBitFields;
+
+  // Only these bits are relevant in the hash, since the top two are shifted
+  // out.
+  static const uint32_t kHashBitMask = 0xffffffffu >> kHashShift;
 
   // Array index strings this short can keep their index in the hash
   // field.

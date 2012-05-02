@@ -63,16 +63,9 @@ void uv__next(EV_P_ ev_idle* watcher, int revents);
 static void uv__finish_close(uv_handle_t* handle);
 
 
-
-#ifndef __GNUC__
-#define __attribute__(a)
-#endif
-
-
 void uv_close(uv_handle_t* handle, uv_close_cb close_cb) {
   uv_udp_t* udp;
   uv_async_t* async;
-  uv_timer_t* timer;
   uv_stream_t* stream;
   uv_process_t* process;
 
@@ -129,11 +122,7 @@ void uv_close(uv_handle_t* handle, uv_close_cb close_cb) {
       break;
 
     case UV_TIMER:
-      timer = (uv_timer_t*)handle;
-      if (ev_is_active(&timer->timer_watcher)) {
-        ev_ref(timer->loop->ev);
-      }
-      ev_timer_stop(timer->loop->ev, &timer->timer_watcher);
+      uv_timer_stop((uv_timer_t*)handle);
       break;
 
     case UV_PROCESS:
@@ -178,6 +167,11 @@ void uv_loop_delete(uv_loop_t* loop) {
     default_loop_ptr = NULL;
   else
     free(loop);
+}
+
+
+int uv_loop_refcount(const uv_loop_t* loop) {
+  return ev_loop_refcount(loop->ev);
 }
 
 
@@ -317,8 +311,8 @@ int64_t uv_now(uv_loop_t* loop) {
 }
 
 
-void uv__req_init(uv_req_t* req) {
-  /* loop->counters.req_init++; */
+void uv__req_init(uv_loop_t* loop, uv_req_t* req) {
+  loop->counters.req_init++;
   req->type = UV_UNKNOWN_REQ;
 }
 
@@ -525,10 +519,23 @@ int uv_async_send(uv_async_t* async) {
 }
 
 
+static int uv__timer_active(const uv_timer_t* timer) {
+  return timer->flags & UV_TIMER_ACTIVE;
+}
+
+
+static int uv__timer_repeating(const uv_timer_t* timer) {
+  return timer->flags & UV_TIMER_REPEAT;
+}
+
+
 static void uv__timer_cb(EV_P_ ev_timer* w, int revents) {
   uv_timer_t* timer = w->data;
 
-  if (!ev_is_active(w)) {
+  assert(uv__timer_active(timer));
+
+  if (!uv__timer_repeating(timer)) {
+    timer->flags &= ~UV_TIMER_ACTIVE;
     ev_ref(EV_A);
   }
 
@@ -551,42 +558,60 @@ int uv_timer_init(uv_loop_t* loop, uv_timer_t* timer) {
 
 int uv_timer_start(uv_timer_t* timer, uv_timer_cb cb, int64_t timeout,
     int64_t repeat) {
-  if (ev_is_active(&timer->timer_watcher)) {
+  if (uv__timer_active(timer)) {
     return -1;
   }
 
   timer->timer_cb = cb;
+  timer->flags |= UV_TIMER_ACTIVE;
+
+  if (repeat)
+    timer->flags |= UV_TIMER_REPEAT;
+  else
+    timer->flags &= ~UV_TIMER_REPEAT;
+
   ev_timer_set(&timer->timer_watcher, timeout / 1000.0, repeat / 1000.0);
   ev_timer_start(timer->loop->ev, &timer->timer_watcher);
   ev_unref(timer->loop->ev);
+
   return 0;
 }
 
 
 int uv_timer_stop(uv_timer_t* timer) {
-  if (ev_is_active(&timer->timer_watcher)) {
+  if (uv__timer_active(timer)) {
     ev_ref(timer->loop->ev);
   }
 
+  timer->flags &= ~(UV_TIMER_ACTIVE | UV_TIMER_REPEAT);
   ev_timer_stop(timer->loop->ev, &timer->timer_watcher);
+
   return 0;
 }
 
 
 int uv_timer_again(uv_timer_t* timer) {
-  if (!ev_is_active(&timer->timer_watcher)) {
+  if (!uv__timer_active(timer)) {
     uv__set_sys_error(timer->loop, EINVAL);
     return -1;
   }
 
+  assert(uv__timer_repeating(timer));
   ev_timer_again(timer->loop->ev, &timer->timer_watcher);
   return 0;
 }
 
+
 void uv_timer_set_repeat(uv_timer_t* timer, int64_t repeat) {
   assert(timer->type == UV_TIMER);
   timer->timer_watcher.repeat = repeat / 1000.0;
+
+  if (repeat)
+    timer->flags |= UV_TIMER_REPEAT;
+  else
+    timer->flags &= ~UV_TIMER_REPEAT;
 }
+
 
 int64_t uv_timer_get_repeat(uv_timer_t* timer) {
   assert(timer->type == UV_TIMER);
@@ -658,7 +683,7 @@ int uv_getaddrinfo(uv_loop_t* loop,
     return -1;
   }
 
-  uv__req_init((uv_req_t*)handle);
+  uv__req_init(loop, (uv_req_t*)handle);
   handle->type = UV_GETADDRINFO;
   handle->loop = loop;
   handle->cb = cb;
@@ -735,8 +760,8 @@ int uv__accept(int sockfd, struct sockaddr* saddr, socklen_t slen) {
   assert(sockfd >= 0);
 
   while (1) {
-#if HAVE_ACCEPT4
-    peerfd = accept4(sockfd, saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
+#if HAVE_SYS_ACCEPT4
+    peerfd = sys_accept4(sockfd, saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
 
     if (peerfd != -1)
       break;

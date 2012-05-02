@@ -607,6 +607,7 @@ int Connection::HandleBIOError(BIO *bio, const char* func, int rv) {
   if (rv >= 0) return rv;
 
   int retry = BIO_should_retry(bio);
+  (void) retry; // unused if !defined(SSL_PRINT_DEBUG)
 
   if (BIO_should_write(bio)) {
     DEBUG_PRINT("[%p] BIO: %s want write. should retry %d\n", ssl_, func, retry);
@@ -928,6 +929,8 @@ Handle<Value> Connection::New(const Arguments& args) {
 
   SSL_set_app_data(p->ssl_, p);
 
+  if (is_server) SSL_set_info_callback(p->ssl_, SSLInfoCallback);
+
 #ifdef OPENSSL_NPN_NEGOTIATED
   if (is_server) {
     // Server should advertise NPN protocols
@@ -987,6 +990,20 @@ Handle<Value> Connection::New(const Arguments& args) {
   }
 
   return args.This();
+}
+
+
+void Connection::SSLInfoCallback(const SSL *ssl, int where, int ret) {
+  if (where & SSL_CB_HANDSHAKE_START) {
+    HandleScope scope;
+    Connection* c = static_cast<Connection*>(SSL_get_app_data(ssl));
+    MakeCallback(c->handle_, "onhandshakestart", 0, NULL);
+  }
+  if (where & SSL_CB_HANDSHAKE_DONE) {
+    HandleScope scope;
+    Connection* c = static_cast<Connection*>(SSL_get_app_data(ssl));
+    MakeCallback(c->handle_, "onhandshakedone", 0, NULL);
+  }
 }
 
 
@@ -1699,9 +1716,20 @@ static void HexEncode(unsigned char *md_value,
                       int* md_hex_len) {
   *md_hex_len = (2*(md_len));
   *md_hexdigest = new char[*md_hex_len + 1];
-  for (int i = 0; i < md_len; i++) {
-    snprintf((char *)(*md_hexdigest + (i*2)), 3, "%02x",  md_value[i]);
+
+  char* buff = *md_hexdigest;
+  const int len = *md_hex_len;
+  for (int i = 0; i < len; i += 2) {
+    // nibble nibble
+    const int index = i / 2;
+    const char msb = (md_value[index] >> 4) & 0x0f;
+    const char lsb = md_value[index] & 0x0f;
+
+    buff[i] = (msb < 10) ? msb + '0' : (msb - 10) + 'a';
+    buff[i + 1] = (lsb < 10) ? lsb + '0' : (lsb - 10) + 'a';
   }
+  // null terminator
+  buff[*md_hex_len] = '\0';
 }
 
 #define hex2i(c) ((c) <= '9' ? ((c) - '0') : (c) <= 'Z' ? ((c) - 'A' + 10) \
@@ -3504,8 +3532,7 @@ class DiffieHellman : public ObjectWrap {
 
     if (args.Length() > 0) {
       if (args[0]->IsInt32()) {
-        diffieHellman->Init(args[0]->Int32Value());
-        initialized = true;
+        initialized = diffieHellman->Init(args[0]->Int32Value());
       } else {
         if (args[0]->IsString()) {
           char* buf;
@@ -3521,16 +3548,15 @@ class DiffieHellman : public ObjectWrap {
             return ThrowException(Exception::Error(
                   String::New("Invalid argument")));
           } else {
-            diffieHellman->Init(reinterpret_cast<unsigned char*>(buf), len);
+            initialized = diffieHellman->Init(
+                reinterpret_cast<unsigned char*>(buf), len);
             delete[] buf;
-            initialized = true;
           }
         } else if (Buffer::HasInstance(args[0])) {
           Local<Object> buffer = args[0]->ToObject();
-          diffieHellman->Init(
+          initialized = diffieHellman->Init(
                   reinterpret_cast<unsigned char*>(Buffer::Data(buffer)),
                   Buffer::Length(buffer));
-          initialized = true;
         }
       }
     }

@@ -85,6 +85,7 @@ static int uv__tcp_keepalive(uv_tcp_t* handle, SOCKET socket, int enable, unsign
 static int uv_tcp_set_socket(uv_loop_t* loop, uv_tcp_t* handle,
     SOCKET socket, int imported) {
   DWORD yes = 1;
+  int non_ifs_lsp;
 
   assert(handle->socket == INVALID_SOCKET);
 
@@ -114,7 +115,10 @@ static int uv_tcp_set_socket(uv_loop_t* loop, uv_tcp_t* handle,
     }
   }
 
-  if (pSetFileCompletionNotificationModes) {
+  non_ifs_lsp = (handle->flags & UV_HANDLE_IPV6) ? uv_tcp_non_ifs_lsp_ipv6 :
+    uv_tcp_non_ifs_lsp_ipv4;
+
+  if (pSetFileCompletionNotificationModes && !non_ifs_lsp) {
     if (pSetFileCompletionNotificationModes((HANDLE) socket,
         FILE_SKIP_SET_EVENT_ON_HANDLE |
         FILE_SKIP_COMPLETION_PORT_ON_SUCCESS)) {
@@ -822,7 +826,8 @@ void uv_process_tcp_read_req(uv_loop_t* loop, uv_tcp_t* handle,
 
   if (!REQ_SUCCESS(req)) {
     /* An error occurred doing the read. */
-    if ((handle->flags & UV_HANDLE_READING)) {
+    if ((handle->flags & UV_HANDLE_READING) ||
+        !(handle->flags & UV_HANDLE_ZERO_READ)) {
       handle->flags &= ~UV_HANDLE_READING;
       buf = (handle->flags & UV_HANDLE_ZERO_READ) ?
             uv_buf_init(NULL, 0) : handle->read_buffer;
@@ -1037,6 +1042,10 @@ int uv_tcp_import(uv_tcp_t* tcp, WSAPROTOCOL_INFOW* socket_protocol_info) {
 
   tcp->flags |= UV_HANDLE_BOUND;
   tcp->flags |= UV_HANDLE_SHARED_TCP_SERVER;
+
+  if (socket_protocol_info->iAddressFamily == AF_INET6) {
+    tcp->flags |= UV_HANDLE_IPV6;
+  }
 
   return uv_tcp_set_socket(tcp->loop, tcp, socket, 1);
 }
