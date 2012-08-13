@@ -43,6 +43,9 @@ class FuncNameInferrer;
 class ParserLog;
 class PositionStack;
 class Target;
+class LexicalScope;
+class AsyncFunction;
+class AsyncScope;
 
 template <typename T> class ZoneListWrapper;
 
@@ -423,6 +426,7 @@ class RegExpParser {
   bool failed_;
 };
 
+
 // ----------------------------------------------------------------------------
 // JAVASCRIPT PARSING
 
@@ -608,19 +612,19 @@ class Parser {
                                    bool* ok);
   Statement* ParseExpressionOrLabelledStatement(ZoneStringList* labels,
                                                 bool* ok);
-  IfStatement* ParseIfStatement(ZoneStringList* labels, bool* ok);
+  Statement* ParseIfStatement(ZoneStringList* labels, bool* ok);
   Statement* ParseContinueStatement(bool* ok);
   Statement* ParseBreakStatement(ZoneStringList* labels, bool* ok);
   Statement* ParseReturnStatement(bool* ok);
   Statement* ParseWithStatement(ZoneStringList* labels, bool* ok);
   CaseClause* ParseCaseClause(bool* default_seen_ptr, bool* ok);
-  SwitchStatement* ParseSwitchStatement(ZoneStringList* labels, bool* ok);
-  DoWhileStatement* ParseDoWhileStatement(ZoneStringList* labels, bool* ok);
-  WhileStatement* ParseWhileStatement(ZoneStringList* labels, bool* ok);
+  Statement* ParseSwitchStatement(ZoneStringList* labels, bool* ok);
+  Statement* ParseDoWhileStatement(ZoneStringList* labels, bool* ok);
+  Statement* ParseWhileStatement(ZoneStringList* labels, bool* ok);
   Statement* ParseForStatement(ZoneStringList* labels, bool* ok);
   Statement* ParseThrowStatement(bool* ok);
   Expression* MakeCatchContext(Handle<String> id, VariableProxy* value);
-  TryStatement* ParseTryStatement(bool* ok);
+  Statement* ParseTryStatement(bool* ok);
   DebuggerStatement* ParseDebuggerStatement(bool* ok);
 
   // Support for hamony block scoped bindings.
@@ -643,6 +647,21 @@ class Parser {
   Expression* ParseObjectLiteral(bool* ok);
   ObjectLiteral::Property* ParseObjectLiteralGetSet(bool is_getter, bool* ok);
   Expression* ParseRegExpLiteral(bool seen_equal, bool* ok);
+
+  Statement* ParseAwaitStatement(ZoneStringList* labels, bool* ok);
+  Statement* ParseAsyncStatement(ZoneStringList* labels, bool* ok);
+  Expression* CreateUnresolvedEmptyCall(Handle<String> name);
+  Handle<String> CreateUniqueIdentifier(const char* name);
+  VariableProxy* DeclareAsyncContinuation(AsyncScope* async_scope, bool* ok);
+  Statement* ParseAsyncDoOrWhileStatement(ZoneStringList* labels, bool* ok, Handle<String> first_run = Handle<String>());
+  Statement* ParseAsyncLoopControlStatement(bool is_break, bool* ok);
+  void DeclareAsyncBreak(AsyncScope async_scope, Expression* wrapped_cond, bool* ok);
+  Expression* WrapAsyncLoopCondition(Expression* cond);
+  Statement* CallContinuationStatement(VariableProxy* fvar);
+  Statement* DebugBreak(const char* name = "debug_break");
+  FunctionLiteral* LiftContinuation(Handle<String> function_name, AsyncScope* previous_async_scope, bool* ok);
+  TryCatchStatement* WrapContinuation(Handle<String> continuation, Handle<String> next_continuation, AsyncScope* try_scope);
+  FunctionLiteral* CreateEmptyFunctionLiteral(Handle<String> function_name);
 
   // Populate the constant properties fixed array for a materialized object
   // literal.
@@ -673,6 +692,7 @@ class Parser {
                                         bool name_is_reserved,
                                         int function_token_position,
                                         FunctionLiteral::Type type,
+                                        bool is_async_function,
                                         bool* ok);
 
 
@@ -771,6 +791,25 @@ class Parser {
                                VariableMode mode,
                                Interface* interface = Interface::NewValue());
   void Declare(Declaration* declaration, bool resolve, bool* ok);
+  VariableProxy* DeclareFunctionLiteral(Handle<String> name,
+                                 VariableMode mode,
+                                 FunctionLiteral* fun,
+                                 bool resolve,
+                                 bool* ok) {
+    VariableProxy* proxy = NewUnresolved(name, mode);
+    Declaration* declaration = factory()->NewFunctionDeclaration(proxy, mode, fun, top_scope_);
+    Declare(declaration, true, ok);
+    return proxy;
+  }
+  VariableProxy* DeclareNewUnresolved(Handle<String> name,
+                                 VariableMode mode,
+                                 bool resolve,
+                                 bool* ok) {
+    VariableProxy* proxy = NewUnresolved(name, mode);
+    Declaration* declaration = factory()->NewVariableDeclaration(proxy, mode, top_scope_);
+    Declare(declaration, true, ok);
+    return proxy;
+  }
 
   bool TargetStackContainsLabel(Handle<String> label);
   BreakableStatement* LookupBreakTarget(Handle<String> label, bool* ok);
@@ -839,6 +878,11 @@ class Parser {
   Zone* zone_;
   friend class BlockState;
   friend class FunctionState;
+  AsyncFunction* async_function_;
+  void* lifting_;
+
+  friend class AsyncFunction;
+  friend class LexicalScope;
 };
 
 

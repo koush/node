@@ -157,6 +157,7 @@ typedef ZoneList<Handle<Object> > ZoneObjectList;
 
 
 #define DECLARE_NODE_TYPE(type)                                         \
+  virtual void printType() { printf(#type); printf("\n"); }             \
   virtual void Accept(AstVisitor* v);                                   \
   virtual AstNode::Type node_type() const { return AstNode::k##type; }
 
@@ -211,6 +212,7 @@ class AstNode: public ZoneObject {
 
   virtual void Accept(AstVisitor* v) = 0;
   virtual Type node_type() const { return kInvalid; }
+  virtual void printType() { printf("none\n"); }
 
   // Type testing & conversion functions overridden by concrete subclasses.
 #define DECLARE_NODE_FUNCTIONS(type)                  \
@@ -2052,6 +2054,7 @@ class FunctionLiteral: public Expression {
   bool is_anonymous() const { return IsAnonymous::decode(bitfield_); }
   bool is_classic_mode() const { return language_mode() == CLASSIC_MODE; }
   LanguageMode language_mode() const;
+  bool is_async() const { return is_async_; }
 
   int materialized_literal_count() { return materialized_literal_count_; }
   int expected_property_count() { return expected_property_count_; }
@@ -2106,7 +2109,8 @@ class FunctionLiteral: public Expression {
                   int parameter_count,
                   Type type,
                   ParameterFlag has_duplicate_parameters,
-                  IsFunctionFlag is_function)
+                  IsFunctionFlag is_function,
+                  bool is_async)
       : Expression(isolate),
         name_(name),
         scope_(scope),
@@ -2117,7 +2121,8 @@ class FunctionLiteral: public Expression {
         expected_property_count_(expected_property_count),
         handler_count_(handler_count),
         parameter_count_(parameter_count),
-        function_token_position_(RelocInfo::kNoPosition) {
+        function_token_position_(RelocInfo::kNoPosition),
+        is_async_(is_async) {
     bitfield_ =
         HasOnlySimpleThisPropertyAssignments::encode(
             has_only_simple_this_property_assignments) |
@@ -2149,6 +2154,7 @@ class FunctionLiteral: public Expression {
   class Pretenure: public BitField<bool, 3, 1> {};
   class HasDuplicateParameters: public BitField<ParameterFlag, 4, 1> {};
   class IsFunction: public BitField<IsFunctionFlag, 5, 1> {};
+  bool is_async_;
 };
 
 
@@ -2954,12 +2960,13 @@ class AstNodeFactory BASE_EMBEDDED {
       int parameter_count,
       FunctionLiteral::ParameterFlag has_duplicate_parameters,
       FunctionLiteral::Type type,
-      FunctionLiteral::IsFunctionFlag is_function) {
+      FunctionLiteral::IsFunctionFlag is_function,
+      bool is_async) {
     FunctionLiteral* lit = new(zone_) FunctionLiteral(
         isolate_, name, scope, body,
         materialized_literal_count, expected_property_count, handler_count,
         has_only_simple_this_property_assignments, this_property_assignments,
-        parameter_count, type, has_duplicate_parameters, is_function);
+        parameter_count, type, has_duplicate_parameters, is_function, is_async);
     // Top-level literal doesn't count for the AST's properties.
     if (is_function == FunctionLiteral::kIsFunction) {
       visitor_.VisitFunctionLiteral(lit);

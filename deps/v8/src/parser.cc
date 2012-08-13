@@ -509,6 +509,115 @@ Parser::FunctionState::~FunctionState() {
 }
 
 
+// Support class for handling the scope of an async function call
+// This keeps track of continuations, try/catch/finally targets,
+// break targets, continue targets, etc.
+class AsyncScope {
+public:
+  AsyncScope()
+    : breaked_(false),
+      previous_scope_(NULL) {
+  }
+
+  AsyncScope(AsyncScope* previous_scope,
+                  Handle<String> continuation,
+                  Handle<String> loop_break = Handle<String>(),
+                  Handle<String> exception = Handle<String>(),
+                  Handle<String> skip_finally = Handle<String>());
+
+  bool log_break();
+  AsyncScope* break_scope();
+  AsyncScope* try_scope();
+  AsyncScope* previous_scope() { return previous_scope_; }
+
+  Handle<String> continuation() { return continuation_; }
+  Handle<String> loop_break() { return loop_break_; }
+  Handle<String> exception() { return exception_; }
+  void set_exception(Handle<String> exception) { exception_ = exception; }
+  void set_has_catch(bool has_catch) { has_catch_ = has_catch; }
+  void set_has_finally(bool has_finally) { has_finally_ = has_finally; }
+  bool has_catch() { return has_catch_; }
+  bool has_finally() { return has_finally_; }
+  Handle<String> skip_finally() { return skip_finally_; }
+  bool breaked() { return breaked_; }
+private:
+  Handle<String> continuation_;
+
+  Handle<String> loop_break_;
+  bool breaked_;
+
+  AsyncScope* previous_scope_;
+
+  // variable in use by the catch block
+  Handle<String> exception_;
+  Handle<String> skip_finally_;
+  bool has_catch_;
+  bool has_finally_;
+};
+
+
+AsyncScope::AsyncScope(AsyncScope* previous_scope,
+                  Handle<String> continuation,
+                  Handle<String> loop_break,
+                  Handle<String> exception,
+                  Handle<String> skip_finally)
+                  : continuation_(continuation),
+                    loop_break_(loop_break),
+                    breaked_(false),
+                    previous_scope_(previous_scope),
+                    exception_(exception),
+                    skip_finally_(skip_finally),
+                    has_catch_(false),
+                    has_finally_(false) {
+}
+
+AsyncScope* AsyncScope::break_scope() {
+  if (!loop_break_.is_null())
+    return this;
+  if (!previous_scope_)
+    return NULL;
+  return previous_scope_->break_scope();
+}
+
+AsyncScope* AsyncScope::try_scope() {
+  if (!exception_.is_null())
+    return this;
+  if (!previous_scope_)
+    return NULL;
+  return previous_scope_->try_scope();
+}
+
+bool AsyncScope::log_break() {
+  // log a breakpoint, notify the
+  // async scope's loop that a break
+  // was requested.
+  // if no break is requested, the
+  // break function is not generated.
+  if (loop_break_.is_null()) {
+    return false;
+  }
+  breaked_ = true;
+  return true;
+}
+
+class AsyncFunction {
+public:
+  AsyncFunction(Parser* parser = NULL)
+    : parser_(parser),
+      async_scope_(NULL) {
+      callback_ = parser->CreateUniqueIdentifier("_callback");
+    }
+  
+  Handle<String> callback() { return callback_; }
+  AsyncScope* get_async_scope() { return async_scope_; }
+  void set_async_scope(AsyncScope* async_scope) { async_scope_ = async_scope; }
+private:
+  Parser* parser_;
+  Handle<String> callback_;
+  AsyncScope* async_scope_;
+};
+
+
 // ----------------------------------------------------------------------------
 // The CHECK_OK macro is a convenient macro to enforce error
 // handling for functions that may fail (by returning !*ok).
@@ -553,7 +662,9 @@ Parser::Parser(Handle<Script> script,
       allow_modules_((parser_flags & kAllowModules) != 0),
       stack_overflow_(false),
       parenthesized_function_(false),
-      zone_(zone) {
+      zone_(zone),
+      async_function_(NULL),
+      lifting_(NULL) {
   isolate_->set_ast_node_id(0);
   if ((parser_flags & kLanguageModeMask) == EXTENDED_MODE) {
     scanner().SetHarmonyScoping(true);
@@ -645,7 +756,8 @@ FunctionLiteral* Parser::DoParseProgram(CompilationInfo* info,
           0,
           FunctionLiteral::kNoDuplicateParameters,
           FunctionLiteral::ANONYMOUS_EXPRESSION,
-          FunctionLiteral::kGlobalOrEval);
+          FunctionLiteral::kGlobalOrEval,
+          false);
       result->set_ast_properties(factory()->visitor()->ast_properties());
     } else if (stack_overflow_) {
       isolate()->StackOverflow();
@@ -729,6 +841,7 @@ FunctionLiteral* Parser::ParseLazy(CompilationInfo* info,
                                   false,  // Strict mode name already checked.
                                   RelocInfo::kNoPosition,
                                   type,
+                                  false,
                                   &ok);
     // Make sure the results agree.
     ASSERT(ok == (result != NULL));
@@ -1198,7 +1311,6 @@ void* Parser::ParseSourceElements(ZoneList<Statement*>* processor,
   return 0;
 }
 
-
 Statement* Parser::ParseModuleElement(ZoneStringList* labels,
                                       bool* ok) {
   // (Ecma 262 5th Edition, clause 14):
@@ -1570,7 +1682,6 @@ Statement* Parser::ParseExportDeclaration(bool* ok) {
   return result;
 }
 
-
 Statement* Parser::ParseBlockElement(ZoneStringList* labels,
                                      bool* ok) {
   // (Ecma 262 5th Edition, clause 14):
@@ -1593,7 +1704,6 @@ Statement* Parser::ParseBlockElement(ZoneStringList* labels,
       return ParseStatement(labels, ok);
   }
 }
-
 
 Statement* Parser::ParseStatement(ZoneStringList* labels, bool* ok) {
   // Statement ::
@@ -1685,7 +1795,7 @@ Statement* Parser::ParseStatement(ZoneStringList* labels, bool* ok) {
       // try-statement in a statement block and put the labels there
       Block* result = factory()->NewBlock(labels, 1, false, zone());
       Target target(&this->target_stack_, result);
-      TryStatement* statement = ParseTryStatement(CHECK_OK);
+      Statement* statement = ParseTryStatement(CHECK_OK);
       if (statement) {
         statement->set_statement_pos(statement_pos);
       }
@@ -1693,6 +1803,7 @@ Statement* Parser::ParseStatement(ZoneStringList* labels, bool* ok) {
       return result;
     }
 
+    case Token::ASYNC:
     case Token::FUNCTION: {
       // FunctionDeclaration is only allowed in the context of SourceElements
       // (Ecma 262 5th Edition, clause 14):
@@ -1714,6 +1825,10 @@ Statement* Parser::ParseStatement(ZoneStringList* labels, bool* ok) {
       stmt = ParseDebuggerStatement(ok);
       break;
 
+    case Token::AWAIT:
+      stmt = ParseAwaitStatement(labels, ok);
+      break;
+
     default:
       stmt = ParseExpressionOrLabelledStatement(labels, ok);
   }
@@ -1721,6 +1836,313 @@ Statement* Parser::ParseStatement(ZoneStringList* labels, bool* ok) {
   // Store the source position of the statement
   if (stmt != NULL) stmt->set_statement_pos(statement_pos);
   return stmt;
+}
+
+
+Expression* Parser::CreateUnresolvedEmptyCall(Handle<String> name) {
+  if (fni_ != NULL) fni_->PushVariableName(name);
+  VariableProxy* func = top_scope_->NewUnresolved(factory(), name,
+                                     scanner().location().beg_pos);
+
+  ZoneList<Expression*>* args = new(zone()) ZoneList<Expression*>(0, zone());
+  Expression* call = factory()->NewCall(func, args, scanner().location().beg_pos);
+  return call;
+}
+
+
+FunctionLiteral* Parser::LiftContinuation(Handle<String> function_name, AsyncScope* previous_async_scope, bool* ok) {
+  FunctionLiteral::Type type = FunctionLiteral::DECLARATION;
+  bool should_infer_name = function_name.is_null();
+
+  // We want a non-null handle as the function name.
+  if (should_infer_name) {
+    function_name = isolate()->factory()->empty_symbol();
+    type = FunctionLiteral::ANONYMOUS_EXPRESSION;
+  }
+
+  Scope* scope = (type == FunctionLiteral::DECLARATION && !is_extended_mode())
+      ? NewScope(top_scope_->DeclarationScope(), FUNCTION_SCOPE)
+      : NewScope(top_scope_, FUNCTION_SCOPE);
+    
+  FunctionState function_state(this, scope, isolate());
+  top_scope_->SetScopeName(function_name);
+
+  ZoneList<Statement*>* body = new(zone()) ZoneList<Statement*>(8, zone());
+  int start_pos = scanner().location().beg_pos;
+  ParseSourceElements(body, Token::RBRACE, false, CHECK_OK);
+
+  FunctionLiteral* continuation_func =
+      factory()->NewFunctionLiteral(
+                                  function_name,
+                                  scope,
+                                  body,
+                                  function_state.materialized_literal_count(),
+                                  function_state.expected_property_count(),
+                                  function_state.handler_count(),
+                                  function_state.only_simple_this_property_assignments(),
+                                  function_state.this_property_assignments(),
+                                  0,
+                                  FunctionLiteral::kNoDuplicateParameters,
+                                  type,
+                                  FunctionLiteral::kIsFunction,
+                                  true);
+
+  if (previous_async_scope) {
+    VariableProxy* previous_continuation = top_scope_->NewUnresolved(factory(), previous_async_scope->continuation(), inside_with());
+    continuation_func->body()->Add(factory()->NewReturnStatement(previous_continuation), zone());
+  }
+  else {
+    continuation_func->body()->Add(factory()->NewReturnStatement(GetLiteralUndefined()), zone());
+  }
+
+  if (fni_ != NULL && should_infer_name) fni_->AddFunction(continuation_func);
+  continuation_func->set_function_token_position(start_pos);
+  return continuation_func;
+}
+
+
+Statement* Parser::ParseAwaitStatement(ZoneStringList* labels, bool* ok) {
+  // AwaitStatement ::
+  //   'await' variables = Statement
+  //        Body
+  //    }
+
+  // await is only valid in an async function
+  Expect(Token::AWAIT, CHECK_OK);
+  if (!async_function_) {
+    *ok = false;
+    ReportMessage("illegal_await", Vector<const char*>::empty());
+    return NULL;
+  }
+
+
+  ZoneStringList parameter_names(4, zone());
+  bool parameter_found = false;
+  while (peek() == Token::IDENTIFIER) {
+    parameter_found = true;
+    Handle<String> param_name = ParseIdentifier(CHECK_OK);
+    parameter_names.Add(param_name, zone());
+    if (peek() == Token::COMMA) {
+      Expect(Token::COMMA, CHECK_OK);
+    }
+  }
+  
+  // await foo = bar();
+  // and
+  // await bar();
+  // are both valid
+  if (parameter_found && peek() != Token::SEMICOLON)
+    Expect(Token::ASSIGN, CHECK_OK);
+
+  Statement* function_call = NULL;
+  Call* call = NULL;
+  if (peek() != Token::SEMICOLON) {
+    // grab the next statement, which should be a function call.
+    function_call = ParseExpressionOrLabelledStatement(labels, ok);
+    ExpressionStatement* stmt = function_call->AsExpressionStatement();
+    if (stmt == NULL) {
+      *ok = false;
+      ReportMessage("illegal_await", Vector<const char*>::empty());
+      return NULL;
+    }
+
+    Expression* expr = stmt->expression();
+    call = expr->AsCall();
+    if (call == NULL) {
+      *ok = false;
+      ReportMessage("illegal_await", Vector<const char*>::empty());
+      return NULL;
+    }
+  }
+  else {
+    // this should be empty?
+    ExpectSemicolon(CHECK_OK);
+    //ParseExpressionOrLabelledStatement(labels, ok);
+  }
+  
+  FunctionLiteral* pump_func;
+  Handle<String> continuation = CreateUniqueIdentifier("await_body");
+
+  // create the callback function that is the continuation func
+  {
+    FunctionLiteral::Type type = FunctionLiteral::DECLARATION;
+    Handle<String> function_name;
+    bool should_infer_name = function_name.is_null();
+    // We want a non-null handle as the function name.
+    if (should_infer_name) {
+      function_name = isolate()->factory()->empty_symbol();
+      type = FunctionLiteral::ANONYMOUS_EXPRESSION;
+    }
+    
+    Scope* scope = (type == FunctionLiteral::DECLARATION && !is_extended_mode())
+        ? NewScope(top_scope_->DeclarationScope(), FUNCTION_SCOPE)
+        : NewScope(top_scope_, FUNCTION_SCOPE);
+
+    FunctionState function_state(this, scope, isolate());
+    top_scope_->SetScopeName(function_name);
+    
+    int start_pos = scanner().location().beg_pos;
+    for (int i = 0; i < parameter_names.length(); i++) {
+      Handle<String> param_name = parameter_names.at(i);
+      top_scope_->DeclareParameter(param_name, is_extended_mode() ? LET : VAR);
+    }
+    
+    // grab the continuation
+    FunctionLiteral* continuation_func = LiftContinuation(continuation, async_function_->get_async_scope(), CHECK_OK);
+    VariableProxy* continuation_func_var = DeclareFunctionLiteral(continuation, VAR, continuation_func, true, ok);
+    
+    // create the continuation pump function
+    ZoneList<Statement*>* body = new(zone()) ZoneList<Statement*>(8, zone());
+
+    VariableProxy* continuation_var = top_scope_->NewUnresolved(factory(), continuation, inside_with());
+    VariableProxy* continuation_var2 = top_scope_->NewUnresolved(factory(), continuation, inside_with());
+    VariableProxy* continuation_var3 = top_scope_->NewUnresolved(factory(), continuation, inside_with());
+
+    ZoneList<Expression*>* first_args = new(zone()) ZoneList<Expression*>(4, zone());
+    for (int i = 0; i < top_scope_->num_parameters(); i++) {
+      first_args->Add(top_scope_->NewUnresolved(factory(), top_scope_->parameter(i)->name(), inside_with()), zone());
+    }
+
+    AsyncScope* try_scope = NULL;
+    if (async_function_->get_async_scope())
+      try_scope = async_function_->get_async_scope()->try_scope();
+
+    // if this await is inside a try block, make sure we bubble the exceptions up
+    if (try_scope) {
+      // reset all the finally watchers
+      while (try_scope) {
+        // the first loop through, this will return itself
+        try_scope = try_scope->try_scope();
+        if (try_scope) {
+          VariableProxy* skip_finally = top_scope_->NewUnresolved(factory(), try_scope->skip_finally(), inside_with());
+          Expression* assign = factory()->NewAssignment(Token::ASSIGN, skip_finally, GetLiteralUndefined(), RelocInfo::kNoPosition);
+          body->InsertAt(0, factory()->NewExpressionStatement(assign), zone());
+
+          try_scope = try_scope->previous_scope();
+        }
+      }
+
+      // reset the try scope
+      try_scope = async_function_->get_async_scope()->try_scope();
+
+      TryCatchStatement* statement = WrapContinuation(continuation, continuation, try_scope);
+      
+      // statement->set_escaping_targets(try_collector.targets());
+      body->Add(statement, zone());
+    }
+    else {
+      VariableProxy* continuation_var5 = top_scope_->NewUnresolved(factory(), continuation, inside_with());
+      Statement* first_assign = factory()->NewExpressionStatement(factory()->NewAssignment(Token::ASSIGN, continuation_var5, continuation_func_var, scanner().location().beg_pos));
+      body->Add(first_assign, zone());
+    }
+
+
+    ZoneList<Expression*>* args = new(zone()) ZoneList<Expression*>(0, zone());
+    Expression* call_continuation = factory()->NewCall(continuation_var, args, scanner().location().beg_pos);
+
+    WhileStatement* loop = factory()->NewWhileStatement(labels);
+    Block* while_block;
+
+    {
+      Target target(&target_stack_, loop);
+      while_block = factory()->NewBlock(NULL, 8, true, zone());
+      Statement* assign = factory()->NewExpressionStatement(factory()->NewAssignment(Token::ASSIGN, continuation_var2, call_continuation, scanner().location().beg_pos));
+      while_block->AddStatement(assign, zone());
+    }
+
+    loop->Initialize(continuation_var3, while_block);
+
+    // add the loop at the VERY end so in case an exception is thrown,
+    // the pump var is changed
+    body->Add(loop, zone());
+
+    pump_func = factory()->NewFunctionLiteral(function_name,
+                                    scope,
+                                    body,
+                                    function_state.materialized_literal_count(),
+                                    function_state.expected_property_count(),
+                                    function_state.handler_count(),
+                                    function_state.only_simple_this_property_assignments(),
+                                    function_state.this_property_assignments(),
+                                    parameter_names.length(),
+                                    FunctionLiteral::kNoDuplicateParameters,
+                                    type,
+                                    FunctionLiteral::kIsFunction,
+                                    false);
+    
+    if (fni_ != NULL && should_infer_name) fni_->AddFunction(pump_func);
+    pump_func->set_function_token_position(start_pos);
+  }
+
+  Block* result = factory()->NewBlock(NULL, 1, true, zone());
+
+  if (call) {
+    ZoneList<Expression*>* arguments = call->arguments();
+    arguments->Add(pump_func, zone());
+    result->AddStatement(function_call, zone());
+  }
+
+  // prevent all finally blocks encapsulating this await from running.
+  AsyncScope* async_scope = async_function_->get_async_scope();
+  while (async_scope) {
+    async_scope = async_scope->try_scope();
+    if (async_scope) {
+      VariableProxy* skip_finally = top_scope_->NewUnresolved(factory(), async_scope->skip_finally(), inside_with());
+      Expression* assign = factory()->NewAssignment(Token::ASSIGN, skip_finally, factory()->NewNumberLiteral(1), RelocInfo::kNoPosition);
+      result->AddStatement(factory()->NewExpressionStatement(assign), zone());
+
+      async_scope = async_scope->previous_scope();
+    }
+  }
+  
+  if (call) {
+    result->AddStatement(factory()->NewReturnStatement(GetLiteralUndefined()), zone());
+  }
+  else {
+    result->AddStatement(factory()->NewReturnStatement(pump_func), zone());
+  }
+  return result;
+}
+
+
+TryCatchStatement* Parser::WrapContinuation(Handle<String> continuation, Handle<String> next_continuation, AsyncScope* try_scope) {
+  Block* try_block = factory()->NewBlock(NULL, 8, true, zone());
+  {
+    VariableProxy* next_continuation_var = top_scope_->NewUnresolved(factory(), next_continuation, inside_with());
+    Expression* call_continuation = CreateUnresolvedEmptyCall(continuation);
+    Statement* try_assign = factory()->NewExpressionStatement(factory()->NewAssignment(Token::ASSIGN, next_continuation_var, call_continuation, scanner().location().beg_pos));
+    try_block->AddStatement(try_assign, zone());
+  }
+
+  // create try catch for the continuation call and assignment
+  TargetCollector catch_collector(zone());
+  Scope* catch_scope = NewScope(top_scope_, CATCH_SCOPE);
+  Variable* catch_variable = NULL;
+  Block* catch_block = factory()->NewBlock(NULL, 8, true, zone());
+  Handle<String> catch_variable_name = CreateUniqueIdentifier("_catch_var");
+  {
+    Target target(&this->target_stack_, &catch_collector);
+    catch_variable = catch_scope->DeclareLocal(catch_variable_name, is_extended_mode() ? LET : VAR, kCreatedInitialized);
+    BlockState block_state(this, catch_scope);
+
+    // catch the exception and send it on up
+    VariableProxy* catch_var = top_scope_->NewUnresolved(factory(), catch_variable_name, inside_with());
+    VariableProxy* exception = top_scope_->NewUnresolved(factory(), try_scope->exception(), inside_with());
+    Statement* assign = factory()->NewExpressionStatement(factory()->NewAssignment(Token::ASSIGN, exception, catch_var, scanner().location().beg_pos));
+
+    // save the exception variable
+    catch_block->AddStatement(assign, zone());
+
+    // exception is saved, so let's set up the continuation that the await pump should use
+    VariableProxy* try_func = top_scope_->NewUnresolved(factory(), try_scope->continuation(), inside_with());
+    VariableProxy* next_continuation_var = top_scope_->NewUnresolved(factory(), next_continuation, inside_with());
+    Statement* catch_assign = factory()->NewExpressionStatement(factory()->NewAssignment(Token::ASSIGN, next_continuation_var, try_func, scanner().location().beg_pos));
+    catch_block->AddStatement(catch_assign, zone());
+  }
+
+  int index = current_function_state_->NextHandlerIndex();
+  TryCatchStatement* result = factory()->NewTryCatchStatement(index, try_block, catch_scope, catch_variable, catch_block);
+  return result;
 }
 
 
@@ -1963,15 +2385,28 @@ Statement* Parser::ParseNativeDeclaration(bool* ok) {
 Statement* Parser::ParseFunctionDeclaration(ZoneStringList* names, bool* ok) {
   // FunctionDeclaration ::
   //   'function' Identifier '(' FormalParameterListopt ')' '{' FunctionBody '}'
-  Expect(Token::FUNCTION, CHECK_OK);
-  int function_token_position = scanner().location().beg_pos;
+  bool async_function;
+  int function_token_position;
+  if (peek() == Token::ASYNC) {
+    async_function = true;
+    Expect(Token::ASYNC, CHECK_OK);
+    function_token_position = scanner().location().beg_pos;
+    Expect(Token::FUNCTION, CHECK_OK);
+  }
+  else if (peek() == Token::FUNCTION) {
+    async_function = false;
+    Expect(Token::FUNCTION, CHECK_OK);
+    function_token_position = scanner().location().beg_pos;
+  }
   bool is_strict_reserved = false;
   Handle<String> name = ParseIdentifierOrStrictReservedWord(
       &is_strict_reserved, CHECK_OK);
+
   FunctionLiteral* fun = ParseFunctionLiteral(name,
                                               is_strict_reserved,
                                               function_token_position,
                                               FunctionLiteral::DECLARATION,
+                                              async_function,
                                               CHECK_OK);
   // Even if we're not at the top-level of the global or a function
   // scope, we treat is as such and introduce the function with it's
@@ -2209,10 +2644,15 @@ Block* Parser::ParseVariableDeclarations(
     // For let/const declarations in harmony mode, we can also immediately
     // pre-resolve the proxy because it resides in the same scope as the
     // declaration.
-    VariableProxy* proxy = NewUnresolved(name, mode);
-    Declaration* declaration =
-        factory()->NewVariableDeclaration(proxy, mode, top_scope_);
-    Declare(declaration, mode != VAR, CHECK_OK);
+    VariableProxy* proxy = NULL;
+
+    // When a statement is being lifted, do not declare the lifted variable.
+    if (lifting_ == NULL) {
+      proxy = NewUnresolved(name, mode);
+      Declaration* declaration =
+          factory()->NewVariableDeclaration(proxy, mode, top_scope_);
+      Declare(declaration, mode != VAR, CHECK_OK);
+    }
     nvars++;
     if (declaration_scope->num_var_or_const() > kMaxNumFunctionLocals) {
       ReportMessageAt(scanner().location(), "too_many_variables",
@@ -2269,7 +2709,7 @@ Block* Parser::ParseVariableDeclarations(
     }
 
     // Record the end position of the initializer.
-    if (proxy->var() != NULL) {
+    if (lifting_ == NULL && proxy->var() != NULL) {
       proxy->var()->set_initializer_position(scanner().location().end_pos);
     }
 
@@ -2342,9 +2782,9 @@ Block* Parser::ParseVariableDeclarations(
             arguments);
       }
 
-      block->AddStatement(factory()->NewExpressionStatement(initialize),
-                          zone());
-    } else if (needs_init) {
+    block->AddStatement(factory()->NewExpressionStatement(initialize),
+                        zone());
+    } else if (needs_init && lifting_ == NULL) {
       // Constant initializations always assign to the declared constant which
       // is always at the function scope level. This is only relevant for
       // dynamically looked-up variables and constants (the start context for
@@ -2469,9 +2909,19 @@ Statement* Parser::ParseExpressionOrLabelledStatement(ZoneStringList* labels,
 }
 
 
-IfStatement* Parser::ParseIfStatement(ZoneStringList* labels, bool* ok) {
+Statement* Parser::ParseIfStatement(ZoneStringList* labels, bool* ok) {
   // IfStatement ::
   //   'if' '(' Expression ')' Statement ('else' Statement)?
+
+  AsyncScope async_scope;
+  AsyncScope* previous_async_scope = async_function_ ? async_function_->get_async_scope() : NULL;
+  Handle<String> continuation;
+  if (async_function_) {
+    continuation = CreateUniqueIdentifier("_if_resume");
+    async_scope = AsyncScope(previous_async_scope, continuation);
+    async_function_->set_async_scope(&async_scope);
+  }
+
 
   Expect(Token::IF, CHECK_OK);
   Expect(Token::LPAREN, CHECK_OK);
@@ -2485,7 +2935,72 @@ IfStatement* Parser::ParseIfStatement(ZoneStringList* labels, bool* ok) {
   } else {
     else_statement = factory()->NewEmptyStatement();
   }
-  return factory()->NewIfStatement(condition, then_statement, else_statement);
+  IfStatement* ret = factory()->NewIfStatement(condition, then_statement, else_statement);
+
+
+  if (async_function_) {
+    // we've parsed out the contents of the if statement,
+    // grabbing the resume function now.
+    // the continuation for the resume function needs to be what it was
+    // prior to the if.
+    async_function_->set_async_scope(previous_async_scope);
+    
+    // grab everything after the if as a resume function
+    VariableProxy* fvar = DeclareAsyncContinuation(&async_scope, ok);
+
+    Block* result = factory()->NewBlock(labels, 3, false, zone());
+    // declare the if statement
+    result->AddStatement(ret, zone());
+
+    // call the resume function immediately after declaring it for the synchronous path.
+    // ZoneList<Expression*>* args = new(zone()) ZoneList<Expression*>(0);
+    // Expression* continuation_call = factory()->NewCall(fvar, args, scanner().location().beg_pos);
+    // result->AddStatement(factory()->NewExpressionStatement(continuation_call));
+    Statement* stmt = CallContinuationStatement(fvar);
+    result->AddStatement(stmt, zone());
+
+    return result;
+  }
+
+  return ret;
+}
+
+Statement* Parser::DebugBreak(const char* name) {
+  return factory()->NewExpressionStatement(CreateUnresolvedEmptyCall(isolate()->factory()->LookupAsciiSymbol(name)));
+}
+
+Statement* Parser::ParseAsyncLoopControlStatement(bool is_break, bool* ok) {
+  // the break statement was illegal in the current context,
+  // see if it is legal within the current async scope.
+  if (!async_function_)
+    return NULL;
+
+  if (!async_function_->get_async_scope())
+    return NULL;
+
+  AsyncScope* break_target = async_function_->get_async_scope()->break_scope();
+  if (!break_target)
+    return NULL;
+
+  if (!break_target->log_break())
+    return NULL;
+
+  Block* result = factory()->NewBlock(NULL, 8, false, zone());
+
+  if (is_break) {
+    // call the loop break to short circuit
+    VariableProxy* breaked = top_scope_->NewUnresolved(factory(), break_target->loop_break(), scanner().location().beg_pos);
+    Assignment* set = factory()->NewAssignment(Token::ASSIGN, breaked, factory()->NewNumberLiteral(1), scanner().location().beg_pos);
+    result->AddStatement(factory()->NewExpressionStatement(set), zone());
+  }
+
+  VariableProxy* continuation = top_scope_->NewUnresolved(factory(), break_target->continuation(), scanner().location().beg_pos);
+  Statement* return_continuation = factory()->NewReturnStatement(continuation);
+
+  result->AddStatement(return_continuation, zone());
+
+  // result->AddStatement(factory()->NewReturnStatement(CreateUnresolvedEmptyCall(break_target->continuation())));
+  return result;
 }
 
 
@@ -2503,6 +3018,10 @@ Statement* Parser::ParseContinueStatement(bool* ok) {
   IterationStatement* target = NULL;
   target = LookupContinueTarget(label, CHECK_OK);
   if (target == NULL) {
+    Statement* async_break = ParseAsyncLoopControlStatement(false, ok);
+    if (async_break != NULL)
+      return async_break;
+
     // Illegal continue statement.
     const char* message = "illegal_continue";
     Vector<Handle<String> > args;
@@ -2539,6 +3058,10 @@ Statement* Parser::ParseBreakStatement(ZoneStringList* labels, bool* ok) {
   BreakableStatement* target = NULL;
   target = LookupBreakTarget(label, CHECK_OK);
   if (target == NULL) {
+    Statement* async_break = ParseAsyncLoopControlStatement(true, ok);
+    if (async_break != NULL)
+      return async_break;
+
     // Illegal break statement.
     const char* message = "illegal_break";
     Vector<Handle<String> > args;
@@ -2563,6 +3086,23 @@ Statement* Parser::ParseReturnStatement(bool* ok) {
   // reporting any errors on it, because of the way errors are
   // reported (underlining).
   Expect(Token::RETURN, CHECK_OK);
+  
+  if (async_function_) {
+    ZoneList<Expression*>* arguments = new(zone()) ZoneList<Expression*>(2, zone());
+    while (peek() != Token::SEMICOLON) {
+      Expression* expr = ParseExpression(true, CHECK_OK);
+      arguments->Add(expr, zone());
+    }
+    ExpectSemicolon(CHECK_OK);
+    VariableProxy* callback = top_scope_->NewUnresolved(factory(), async_function_->callback(), scanner().location().beg_pos);
+    VariableProxy* callback_check = top_scope_->NewUnresolved(factory(), async_function_->callback(), scanner().location().beg_pos);
+    Expression* callback_call = factory()->NewCall(callback, arguments, scanner().location().beg_pos);
+    IfStatement* if_callback = factory()->NewIfStatement(callback_check, factory()->NewExpressionStatement(callback_call), factory()->NewEmptyStatement());
+    Block* result = factory()->NewBlock(NULL, 1, true, zone());
+    result->AddStatement(if_callback, zone());
+    result->AddStatement(factory()->NewReturnStatement(GetLiteralUndefined()), zone());
+    return result;
+  }
 
   Token::Value tok = peek();
   Statement* result;
@@ -2656,10 +3196,16 @@ CaseClause* Parser::ParseCaseClause(bool* default_seen_ptr, bool* ok) {
 }
 
 
-SwitchStatement* Parser::ParseSwitchStatement(ZoneStringList* labels,
+Statement* Parser::ParseSwitchStatement(ZoneStringList* labels,
                                               bool* ok) {
   // SwitchStatement ::
   //   'switch' '(' Expression ')' '{' CaseClause* '}'
+
+  if (async_function_) {
+    *ok = false;
+    ReportMessage("illegal_async_switch", Vector<const char*>::empty());
+    return NULL;
+  }
 
   SwitchStatement* statement = factory()->NewSwitchStatement(labels);
   Target target(&this->target_stack_, statement);
@@ -2701,7 +3247,16 @@ Statement* Parser::ParseThrowStatement(bool* ok) {
 }
 
 
-TryStatement* Parser::ParseTryStatement(bool* ok) {
+struct AsyncTryData {
+  Handle<String> has_run;
+  Handle<String> has_caught;
+  Handle<String> skip_finally;
+  Handle<String> exception;
+  AsyncScope* previous_async_scope;
+};
+
+
+Statement* Parser::ParseTryStatement(bool* ok) {
   // TryStatement ::
   //   'try' Block Catch
   //   'try' Block Finally
@@ -2713,6 +3268,36 @@ TryStatement* Parser::ParseTryStatement(bool* ok) {
   // Finally ::
   //   'finally' Block
 
+  if (async_function_ && !lifting_) {
+    Handle<String> continuation = CreateUniqueIdentifier("_try_resume");
+    Handle<String> has_run = CreateUniqueIdentifier("_try_has_run");
+    Handle<String> has_caught = CreateUniqueIdentifier("_try_has_caught");
+    Handle<String> skip_finally = CreateUniqueIdentifier("_try_skip_finally");
+    Handle<String> exception = CreateUniqueIdentifier("_try_exception");
+    AsyncScope* previous_async_scope = async_function_->get_async_scope();
+    AsyncScope async_scope = AsyncScope(previous_async_scope, continuation, Handle<String>(), exception, skip_finally);
+    async_function_->set_async_scope(&async_scope);
+
+    AsyncTryData data;
+    data.has_run = has_run;
+    data.has_caught = has_caught;
+    data.skip_finally = skip_finally;
+    data.exception = exception;
+    data.previous_async_scope = previous_async_scope;
+    lifting_ = &data;
+
+    DeclareNewUnresolved(has_run, VAR, false, CHECK_OK);
+    DeclareNewUnresolved(has_caught, VAR, false, CHECK_OK);
+    DeclareNewUnresolved(exception, VAR, false, CHECK_OK);
+    DeclareNewUnresolved(skip_finally, VAR, false, CHECK_OK);
+    
+    VariableProxy* fvar = DeclareAsyncContinuation(&async_scope, CHECK_OK);
+    Statement* stmt = CallContinuationStatement(fvar);
+    return stmt;
+  }
+  AsyncTryData* data = (AsyncTryData*)lifting_;
+  lifting_ = NULL;
+
   Expect(Token::TRY, CHECK_OK);
 
   TargetCollector try_collector(zone());
@@ -2720,6 +3305,36 @@ TryStatement* Parser::ParseTryStatement(bool* ok) {
 
   { Target target(&this->target_stack_, &try_collector);
     try_block = ParseBlock(NULL, CHECK_OK);
+
+    if (async_function_) {
+      VariableProxy* has_run = top_scope_->NewUnresolved(factory(), data->has_run, scanner().location().beg_pos);
+      Block* pewp2 = factory()->NewBlock(NULL, 2, true, zone());
+      pewp2->AddStatement(try_block, zone());
+      IfStatement* has_run_check = factory()->NewIfStatement(factory()->NewUnaryOperation(Token::NOT, has_run, scanner().location().beg_pos), pewp2, factory()->NewEmptyStatement());
+
+      // add a setter that logs that this try block was run
+      // insert it into inside the try block, as the first statement
+      VariableProxy* has_run2 = top_scope_->NewUnresolved(factory(), data->has_run, scanner().location().beg_pos);
+      Assignment* set = factory()->NewAssignment(Token::ASSIGN, has_run2, factory()->NewNumberLiteral(1), scanner().location().beg_pos);
+      try_block->statements()->InsertAt(0, factory()->NewExpressionStatement(set), zone());
+
+      // can variable proxy be used twice? i suspect not, as that then creates a graph, which may segfault on deallocation.
+      VariableProxy* exception = top_scope_->NewUnresolved(factory(), data->exception, scanner().location().beg_pos);
+      VariableProxy* exception_rethrow = top_scope_->NewUnresolved(factory(), data->exception, scanner().location().beg_pos);
+      
+      Block* pewp = factory()->NewBlock(NULL, 2, true, zone());
+      pewp->AddStatement(factory()->NewExpressionStatement(factory()->NewThrow(exception_rethrow, scanner().location().beg_pos)), zone());
+      
+      IfStatement* exception_check = factory()->NewIfStatement(exception,
+                                                              pewp,
+                                                              factory()->NewEmptyStatement());
+
+      Block* wrapping_block = factory()->NewBlock(NULL, 5, true, zone());
+      wrapping_block->AddStatement(exception_check, zone());
+      wrapping_block->AddStatement(has_run_check, zone());
+
+      try_block = wrapping_block;
+    }
   }
 
   Token::Value tok = peek();
@@ -2762,6 +3377,29 @@ TryStatement* Parser::ParseTryStatement(bool* ok) {
 
       BlockState block_state(this, catch_scope);
       catch_block = ParseBlock(NULL, CHECK_OK);
+
+      if (async_function_) {
+        // note that this has a catch block
+        async_function_->get_async_scope()->set_has_catch(true);
+        // guard against catching two exceptions (need to proceed to the finally)
+        VariableProxy* has_caught = top_scope_->NewUnresolved(factory(), data->has_caught, scanner().location().beg_pos);
+        IfStatement* has_caught_check = factory()->NewIfStatement(factory()->NewUnaryOperation(Token::NOT, has_caught, scanner().location().beg_pos), catch_block, factory()->NewEmptyStatement());
+
+        VariableProxy* has_caught2 = top_scope_->NewUnresolved(factory(), data->has_caught, scanner().location().beg_pos);
+        Assignment* set = factory()->NewAssignment(Token::ASSIGN, has_caught2, factory()->NewNumberLiteral(1), scanner().location().beg_pos);
+        catch_block->statements()->InsertAt(0, factory()->NewExpressionStatement(set), zone());
+
+        // unset the exception variable once inside the catch. is this necessary?
+        VariableProxy* exception = top_scope_->NewUnresolved(factory(), data->exception, scanner().location().beg_pos);
+        Assignment* exception_set = factory()->NewAssignment(Token::ASSIGN, exception, GetLiteralUndefined(), scanner().location().beg_pos);
+        catch_block->statements()->InsertAt(0, factory()->NewExpressionStatement(exception_set), zone());
+
+        Block* wrapping_block = factory()->NewBlock(NULL, 5, true, zone());
+        wrapping_block->AddStatement(has_caught_check, zone());
+      
+        catch_block = wrapping_block;
+      }
+
     } else {
       Expect(Token::LBRACE, CHECK_OK);
     }
@@ -2769,10 +3407,25 @@ TryStatement* Parser::ParseTryStatement(bool* ok) {
     tok = peek();
   }
 
+  if (async_function_) {
+    if (tok == Token::FINALLY || catch_block == NULL) {
+      async_function_->get_async_scope()->set_has_finally(true);
+    }
+    async_function_->set_async_scope(data->previous_async_scope);
+  }
+
   Block* finally_block = NULL;
   if (tok == Token::FINALLY || catch_block == NULL) {
     Consume(Token::FINALLY);
     finally_block = ParseBlock(NULL, CHECK_OK);
+
+    if (async_function_) {
+      Block* wrapping_block = factory()->NewBlock(NULL, 2, true, zone());
+      VariableProxy* skip_finally = top_scope_->NewUnresolved(factory(), data->skip_finally, scanner().location().beg_pos);
+      IfStatement* skip_finally_check = factory()->NewIfStatement(factory()->NewUnaryOperation(Token::NOT, skip_finally, scanner().location().beg_pos), finally_block, factory()->NewEmptyStatement());
+      wrapping_block->AddStatement(skip_finally_check, zone());
+      finally_block = wrapping_block;
+    }
   }
 
   // Simplify the AST nodes by converting:
@@ -2812,10 +3465,103 @@ TryStatement* Parser::ParseTryStatement(bool* ok) {
 }
 
 
-DoWhileStatement* Parser::ParseDoWhileStatement(ZoneStringList* labels,
+struct AwaitWhileData {
+  AsyncScope* previous_async_scope;
+  Handle<String> first_run_name;
+};
+
+Statement* Parser::ParseAsyncDoOrWhileStatement(ZoneStringList* labels, bool* ok, Handle<String> first_run_name) {
+  AwaitWhileData await_while_data;
+  lifting_ = &await_while_data;
+  
+  AsyncScope* previous_async_scope = await_while_data.previous_async_scope = async_function_->get_async_scope();
+  await_while_data.first_run_name = first_run_name;
+
+  Handle<String> continuation = CreateUniqueIdentifier("_while_resume");
+  Handle<String> loop_break = CreateUniqueIdentifier("_while_break");
+
+  AsyncScope async_scope = AsyncScope(previous_async_scope, continuation, loop_break);
+  async_function_->set_async_scope(&async_scope);
+  
+  Block* result = factory()->NewBlock(labels, 4, false, zone());
+
+  // lift out the for statement, lifting_ will be NULLed out after
+  // this function, the await continuations will also be reset to their
+  // previous values.
+  VariableProxy* fvar = DeclareAsyncContinuation(&async_scope, ok);
+
+  if (async_scope.breaked()) {
+    DeclareNewUnresolved(loop_break, VAR, true, ok);
+  }
+
+  // call the resume function immediately after declaring it.
+  Statement* stmt = CallContinuationStatement(fvar);
+  result->AddStatement(stmt, zone());
+
+  return result;
+}
+
+
+Statement* Parser::ParseDoWhileStatement(ZoneStringList* labels,
                                                 bool* ok) {
   // DoStatement ::
   //   'do' Statement 'while' '(' Expression ')' ';'
+
+  if (async_function_) {
+    if (!lifting_) {
+      Handle<String> first_run_name = CreateUniqueIdentifier("_while_first_run");
+      VariableProxy* first_run = DeclareNewUnresolved(first_run_name, VAR, false, CHECK_OK);
+
+      Assignment* init = factory()->NewAssignment(Token::ASSIGN, first_run, factory()->NewNumberLiteral(1), scanner().location().beg_pos);
+      Statement* ret = ParseAsyncDoOrWhileStatement(labels, ok, first_run_name);
+
+      Block* result = factory()->NewBlock(labels, 4, false, zone());
+      result->AddStatement(factory()->NewExpressionStatement(init), zone());
+      result->AddStatement(ret, zone());
+      return result;
+    }
+    else {
+      AwaitWhileData* data = (AwaitWhileData*)lifting_;
+      lifting_ = NULL;
+
+      WhileStatement* loop = factory()->NewWhileStatement(labels);
+      Target target(&this->target_stack_, loop);
+
+      Expect(Token::DO, CHECK_OK);
+      Statement* body = ParseStatement(NULL, CHECK_OK);
+      Expect(Token::WHILE, CHECK_OK);
+      Expect(Token::LPAREN, CHECK_OK);
+
+      Expression* cond = ParseExpression(true, CHECK_OK);
+      Expect(Token::RPAREN, CHECK_OK);
+
+      // Allow do-statements to be terminated with and without
+      // semi-colons. This allows code such as 'do;while(0)return' to
+      // parse, which would not be the case if we had used the
+      // ExpectSemicolon() functionality here.
+      if (peek() == Token::SEMICOLON) Consume(Token::SEMICOLON);
+
+      // not sure about how the parser internals work, but I don't think I can the same instance of a VariableProxy* into two expressions.
+      VariableProxy* first_run1 = top_scope_->NewUnresolved(factory(), data->first_run_name, scanner().location().beg_pos);
+      VariableProxy* first_run2 = top_scope_->NewUnresolved(factory(), data->first_run_name, scanner().location().beg_pos);
+                                         
+      cond = factory()->NewBinaryOperation(Token::OR, first_run1, cond, scanner().location().beg_pos);
+      Assignment* set = factory()->NewAssignment(Token::ASSIGN, first_run2, factory()->NewNumberLiteral(0), scanner().location().beg_pos);
+
+      Block* mod_body = factory()->NewBlock(labels, 4, false, zone());
+      mod_body->AddStatement(factory()->NewExpressionStatement(set), zone());
+      mod_body->AddStatement(body, zone());
+
+      cond = WrapAsyncLoopCondition(cond);
+
+      // since we are lifting, we need to reset continuations to the previous values
+      // for the statements following the for loop.
+      async_function_->set_async_scope(data->previous_async_scope);
+
+      if (loop != NULL) loop->Initialize(cond, mod_body);
+      return loop;
+    }
+  }
 
   DoWhileStatement* loop = factory()->NewDoWhileStatement(labels);
   Target target(&this->target_stack_, loop);
@@ -2844,9 +3590,15 @@ DoWhileStatement* Parser::ParseDoWhileStatement(ZoneStringList* labels,
 }
 
 
-WhileStatement* Parser::ParseWhileStatement(ZoneStringList* labels, bool* ok) {
+Statement* Parser::ParseWhileStatement(ZoneStringList* labels, bool* ok) {
   // WhileStatement ::
   //   'while' '(' Expression ')' Statement
+
+  if (async_function_ && !lifting_) {
+    return ParseAsyncDoOrWhileStatement(labels, ok);
+  }
+  AwaitWhileData* data = (AwaitWhileData*)lifting_;
+  lifting_ = NULL;
 
   WhileStatement* loop = factory()->NewWhileStatement(labels);
   Target target(&this->target_stack_, loop);
@@ -2857,17 +3609,248 @@ WhileStatement* Parser::ParseWhileStatement(ZoneStringList* labels, bool* ok) {
   Expect(Token::RPAREN, CHECK_OK);
   Statement* body = ParseStatement(NULL, CHECK_OK);
 
+  if (data != NULL ) {
+    cond = WrapAsyncLoopCondition(cond);
+    // since we are lifting, we need to reset continuations to the previous values
+    // for the statements following the for loop.
+    async_function_->set_async_scope(data->previous_async_scope);
+  }
+
   if (loop != NULL) loop->Initialize(cond, body);
   return loop;
 }
+
+
+Handle<String> Parser::CreateUniqueIdentifier(const char* name) {
+  int suffix = scanner().location().beg_pos;
+  char sym[32];
+  sprintf(sym, "_%s_%d", name, suffix);
+  //Vector<const char> symvec = Vector<const char>(sym, strlen(sym));
+  return isolate()->factory()->LookupAsciiSymbol(sym);
+}
+
+FunctionLiteral* Parser::CreateEmptyFunctionLiteral(Handle<String> function_name) {
+  FunctionLiteral* func;
+  FunctionLiteral::Type type = FunctionLiteral::DECLARATION;
+  bool should_infer_name = function_name.is_null();
+  // We want a non-null handle as the function name.
+  if (should_infer_name) {
+    function_name = isolate()->factory()->empty_symbol();
+    type = FunctionLiteral::ANONYMOUS_EXPRESSION;
+  }
+
+  Scope* scope = (type == FunctionLiteral::DECLARATION && !is_extended_mode())
+      ? NewScope(top_scope_->DeclarationScope(), FUNCTION_SCOPE)
+      : NewScope(top_scope_, FUNCTION_SCOPE);
+
+  FunctionState function_state(this, scope, isolate());
+  top_scope_->SetScopeName(function_name);
+
+  int start_pos = scanner().location().beg_pos;
+
+  // create the continuation pump function
+  ZoneList<Statement*>* body = new(zone()) ZoneList<Statement*>(8, zone());
+
+  func = factory()->NewFunctionLiteral(function_name,
+                                  scope,
+                                  body,
+                                  function_state.materialized_literal_count(),
+                                  function_state.expected_property_count(),
+                                  function_state.handler_count(),
+                                  function_state.only_simple_this_property_assignments(),
+                                  function_state.this_property_assignments(),
+                                  0,
+                                  FunctionLiteral::kNoDuplicateParameters,
+                                  type,
+                                  FunctionLiteral::kIsFunction,
+                                  false);
+
+  if (fni_ != NULL && should_infer_name) fni_->AddFunction(func);
+
+  func->set_function_token_position(start_pos);
+
+  return func;
+}
+
+
+VariableProxy* Parser::DeclareAsyncContinuation(AsyncScope* async_scope, bool* ok) {
+  Handle<String> continuation = async_scope->continuation();
+  Handle<String> sync_continuation = continuation;
+
+  AsyncScope* try_scope = async_scope->previous_scope();
+  if (try_scope)
+    try_scope = try_scope->try_scope();
+
+  if (try_scope) {
+    sync_continuation = CreateUniqueIdentifier("sync_cont");
+  }
+
+  AsyncScope* previous_async_scope = async_scope->previous_scope();
+  FunctionLiteral* continuation_func = LiftContinuation(sync_continuation, previous_async_scope, CHECK_OK);
+  VariableProxy* continuation_var = DeclareFunctionLiteral(sync_continuation, VAR, continuation_func, true, CHECK_OK);
+
+  // check if this continuation needs to be wrapped in a try/catch,
+  // check the parent scope's try scope, so as to prevent wrapping a continuation with itself.
+  if (!try_scope) {
+    return continuation_var;
+  }
+
+  FunctionLiteral* async_func;
+  {
+    FunctionLiteral::Type type = FunctionLiteral::DECLARATION;
+    Handle<String> function_name = continuation;
+    bool should_infer_name = function_name.is_null();
+    // We want a non-null handle as the function name.
+    if (should_infer_name) {
+      function_name = isolate()->factory()->empty_symbol();
+      type = FunctionLiteral::ANONYMOUS_EXPRESSION;
+    }
+
+    Scope* scope = (type == FunctionLiteral::DECLARATION && !is_extended_mode())
+        ? NewScope(top_scope_->DeclarationScope(), FUNCTION_SCOPE)
+        : NewScope(top_scope_, FUNCTION_SCOPE);
+
+    FunctionState function_state(this, scope, isolate());
+    top_scope_->SetScopeName(function_name);
+
+    int start_pos = scanner().location().beg_pos;
+    ZoneList<Statement*>* body = new(zone()) ZoneList<Statement*>(8, zone());
+
+    Handle<String> next_continuation = CreateUniqueIdentifier("_next_cont");
+    VariableProxy* next_continuation_var = DeclareNewUnresolved(next_continuation, VAR, false, CHECK_OK);
+    TryCatchStatement* try_catch = WrapContinuation(sync_continuation, next_continuation, try_scope);
+    body->Add(try_catch, zone());
+    body->Add(factory()->NewReturnStatement(next_continuation_var), zone());
+
+    // create the continuation pump function
+    async_func = factory()->NewFunctionLiteral(function_name,
+                                    scope,
+                                    body,
+                                    function_state.materialized_literal_count(),
+                                    function_state.expected_property_count(),
+                                    function_state.handler_count(),
+                                    function_state.only_simple_this_property_assignments(),
+                                    function_state.this_property_assignments(),
+                                    0,
+                                    FunctionLiteral::kNoDuplicateParameters,
+                                    type,
+                                    FunctionLiteral::kIsFunction,
+                                    false);
+
+    if (fni_ != NULL && should_infer_name) fni_->AddFunction(async_func);
+    async_func->set_function_token_position(start_pos);
+  }
+
+  DeclareFunctionLiteral(continuation, VAR, async_func, true, CHECK_OK);
+  return continuation_var;
+}
+
+Statement* Parser::CallContinuationStatement(VariableProxy* fvar) {
+  ZoneList<Expression*>* args = new(zone()) ZoneList<Expression*>(0, zone());
+  Expression* continuation_call = factory()->NewCall(fvar, args, scanner().location().beg_pos);
+  IfStatement* if_wrapped = factory()->NewIfStatement(factory()->NewUnaryOperation(Token::NOT, continuation_call, scanner().location().beg_pos), factory()->NewReturnStatement(GetLiteralUndefined()), factory()->NewEmptyStatement());
+  return if_wrapped;
+}
+
+Expression* Parser::WrapAsyncLoopCondition(Expression* cond) {
+  if (async_function_->get_async_scope()->breaked()) {
+    // there was a break after an await that needs to be
+    // handled.
+    VariableProxy* breaked = top_scope_->NewUnresolved(factory(), async_function_->get_async_scope()->loop_break(), scanner().location().beg_pos);
+    UnaryOperation* breaked_check = factory()->NewUnaryOperation(Token::NOT, breaked, scanner().location().beg_pos);
+    if (cond) {
+      cond = factory()->NewBinaryOperation(Token::AND, breaked_check, cond, scanner().location().beg_pos);
+    }
+    else {
+      cond = breaked_check;
+    }
+  }
+  return cond;
+}
+
+
+struct AwaitForData {
+  Statement* init;
+  Statement* next;
+  // may or may not be set
+  Handle<String> loop_next;
+  Handle<String> init_name;
+  Handle<String> loop_has_run;
+  AsyncScope* previous_async_scope;
+};
 
 
 Statement* Parser::ParseForStatement(ZoneStringList* labels, bool* ok) {
   // ForStatement ::
   //   'for' '(' Expression? ';' Expression? ';' Expression? ')' Statement
 
-  Statement* init = NULL;
+  // if this is an async function, and we aren't lifting, we need to lift the for out
+  if (async_function_ && !lifting_) {
+    // note that we are lifting this for statement out
+    AwaitForData await_for_data;
+    lifting_ = &await_for_data;
 
+    // save off the old await resume func
+    AsyncScope* previous_async_scope = await_for_data.previous_async_scope = async_function_->get_async_scope();
+
+    Handle<String> continuation = CreateUniqueIdentifier("_for_resume");
+    Handle<String> loop_break = CreateUniqueIdentifier("_for_break");
+
+    Handle<String> loop_has_run = await_for_data.loop_has_run = CreateUniqueIdentifier("_for_has_run");
+    Handle<String> loop_next = await_for_data.loop_next = CreateUniqueIdentifier("_for_next");
+    // don't set the loop_next for the async scope, as there may not be a increment
+    // in the loop
+    AsyncScope async_scope = AsyncScope(previous_async_scope, continuation, loop_break);
+    async_function_->set_async_scope(&async_scope);
+
+    Block* result = factory()->NewBlock(labels, 4, false, zone());
+
+    // lift out the for statement, lifting_ will be NULLed out after
+    // this function, the await continuations will also be reset to their
+    // previous values.
+    VariableProxy* fvar = DeclareAsyncContinuation(&async_scope, ok);
+
+    if (!await_for_data.init_name.is_null())
+      DeclareNewUnresolved(await_for_data.init_name, VAR, false, CHECK_OK);
+
+    if (await_for_data.init != NULL)
+      result->AddStatement(await_for_data.init, zone());
+
+    if (await_for_data.next != NULL) {
+      FunctionLiteral* next_func = CreateEmptyFunctionLiteral(loop_next);
+      ZoneList<Statement*>* body = next_func->body();
+      // add the next expression
+      if (async_scope.breaked())
+      {
+        VariableProxy* breaked = top_scope_->NewUnresolved(factory(), loop_break, inside_with());
+        IfStatement* next_wrapped = factory()->NewIfStatement(factory()->NewUnaryOperation(Token::NOT, breaked, scanner().location().beg_pos), await_for_data.next, factory()->NewEmptyStatement());
+        body->Add(next_wrapped, zone());
+      }
+      else {
+        body->Add(await_for_data.next, zone());
+      }
+
+      // now declare the function
+      DeclareFunctionLiteral(loop_next, VAR, next_func, true, CHECK_OK);
+
+      // declare the has run once var
+      DeclareNewUnresolved(loop_has_run, VAR, true, ok);
+    }
+
+    if (async_scope.breaked()) {
+      DeclareNewUnresolved(loop_break, VAR, true, ok);
+    }
+
+    // call the resume function immediately after declaring it.
+    Statement* stmt = CallContinuationStatement(fvar);
+    result->AddStatement(stmt, zone());
+
+    return result;
+  }
+
+  Handle<String> name;
+  Statement* init = NULL;
+  
   // Create an in-between scope for let-bound iteration variables.
   Scope* saved_scope = top_scope_;
   Scope* for_scope = NewScope(top_scope_, BLOCK_SCOPE);
@@ -2878,11 +3861,15 @@ Statement* Parser::ParseForStatement(ZoneStringList* labels, bool* ok) {
   for_scope->set_start_position(scanner().location().beg_pos);
   if (peek() != Token::SEMICOLON) {
     if (peek() == Token::VAR || peek() == Token::CONST) {
-      Handle<String> name;
       Block* variable_statement =
           ParseVariableDeclarations(kForStatement, NULL, NULL, &name, CHECK_OK);
 
       if (peek() == Token::IN && !name.is_null()) {
+        if (async_function_) {
+          *ok = false;
+          ReportMessage("illegal_async_for_in", Vector<const char*>::empty());
+          return NULL;
+        }
         VariableProxy* each = top_scope_->NewUnresolved(factory(), name);
         ForInStatement* loop = factory()->NewForInStatement(labels);
         Target target(&this->target_stack_, loop);
@@ -2913,6 +3900,11 @@ Statement* Parser::ParseForStatement(ZoneStringList* labels, bool* ok) {
                                    CHECK_OK);
       bool accept_IN = !name.is_null() && decl_props != kHasInitializers;
       if (peek() == Token::IN && accept_IN) {
+        if (async_function_) {
+          *ok = false;
+          ReportMessage("illegal_async_for_in", Vector<const char*>::empty());
+          return NULL;
+        }
         // Rewrite a for-in statement of the form
         //
         //   for (let x in e) b
@@ -2961,6 +3953,11 @@ Statement* Parser::ParseForStatement(ZoneStringList* labels, bool* ok) {
     } else {
       Expression* expression = ParseExpression(false, CHECK_OK);
       if (peek() == Token::IN) {
+        if (async_function_) {
+          *ok = false;
+          ReportMessage("illegal_async_for_in", Vector<const char*>::empty());
+          return NULL;
+        }
         // Signal a reference error if the expression is an invalid
         // left-hand side expression.  We could report this as a syntax
         // error here but for compatibility with JSC we choose to report
@@ -3012,7 +4009,27 @@ Statement* Parser::ParseForStatement(ZoneStringList* labels, bool* ok) {
   }
   Expect(Token::RPAREN, CHECK_OK);
 
+  // if this is a for being lifted for an async function,
+  // store the init and next call for outside of the loop
+  AwaitForData* data = (AwaitForData*)lifting_;
+  if (lifting_ != NULL) {
+    lifting_ = NULL;
+    data->next = next;
+    data->init = init;
+    // wrap the next in a function we can call via loop_next_
+    if (next) {
+      next = factory()->NewExpressionStatement(CreateUnresolvedEmptyCall(data->loop_next));
+    }
+    init = NULL;
+    data->init_name = name;
+  }
+
   Statement* body = ParseStatement(NULL, CHECK_OK);
+  if (data != NULL )
+    cond = WrapAsyncLoopCondition(cond);
+
+  Statement* ret;
+
   top_scope_ = saved_scope;
   for_scope->set_end_position(scanner().location().end_pos);
   for_scope = for_scope->FinalizeBlockScope();
@@ -3027,17 +4044,59 @@ Statement* Parser::ParseForStatement(ZoneStringList* labels, bool* ok) {
     //     let x = i;
     //     for (; c; n) b
     //   }
-    ASSERT(init != NULL);
     Block* result = factory()->NewBlock(NULL, 2, false, zone());
-    result->AddStatement(init, zone());
+    if (init != NULL)
+      result->AddStatement(init, zone());
     result->AddStatement(loop, zone());
     result->set_scope(for_scope);
     if (loop) loop->Initialize(NULL, cond, next, body);
-    return result;
+    ret = result;
   } else {
     if (loop) loop->Initialize(init, cond, next, body);
-    return loop;
+    ret = loop;
   }
+
+  if (data != NULL ) {
+    cond = WrapAsyncLoopCondition(cond);
+
+    Handle<String> loop_has_run = data->loop_has_run;
+    Handle<String> loop_next = data->loop_next;
+    Handle<String> loop_break = async_function_->get_async_scope()->loop_break();
+    // increment next if coming in from an async call.
+    VariableProxy* loop_has_run_var1 = top_scope_->NewUnresolved(factory(), loop_has_run, inside_with());
+    VariableProxy* loop_has_run_var2 = top_scope_->NewUnresolved(factory(), loop_has_run, inside_with());
+    Assignment* set = factory()->NewAssignment(Token::ASSIGN, loop_has_run_var1, factory()->NewNumberLiteral(1), scanner().location().beg_pos);
+
+    Statement* next_stmt;
+
+    Block* result = factory()->NewBlock(labels, 4, false, zone());
+    if (async_function_->get_async_scope()->breaked()) {
+      {
+        // gaurd the next call in case the loop was broken
+        Statement* next_call = factory()->NewExpressionStatement(CreateUnresolvedEmptyCall(loop_next));
+        VariableProxy* breaked = top_scope_->NewUnresolved(factory(), loop_break, inside_with());
+        next_stmt = factory()->NewIfStatement(factory()->NewUnaryOperation(Token::NOT, breaked, scanner().location().beg_pos), next_call, factory()->NewEmptyStatement());
+      }
+      {
+        IfStatement* if_wrapped = factory()->NewIfStatement(loop_has_run_var2, next_stmt, factory()->NewExpressionStatement(set));
+        result->AddStatement(if_wrapped, zone());
+      }
+    }
+    else {
+      next_stmt = factory()->NewExpressionStatement(CreateUnresolvedEmptyCall(loop_next));
+      IfStatement* if_wrapped = factory()->NewIfStatement(loop_has_run_var2, next_stmt, factory()->NewExpressionStatement(set));
+      result->AddStatement(if_wrapped, zone());
+    }
+
+    result->AddStatement(ret, zone());
+
+    // since we are lifting, we need to reset continuations to the previous values
+    // for the statements following the for loop.
+    async_function_->set_async_scope(data->previous_async_scope);
+    
+    return result;
+  }
+  return ret;
 }
 
 
@@ -3498,7 +4557,10 @@ Expression* Parser::ParseMemberWithNewPrefixesExpression(PositionStack* stack,
 
   // Parse the initial primary or function expression.
   Expression* result = NULL;
-  if (peek() == Token::FUNCTION) {
+  bool async_function = peek() == Token::ASYNC;
+  if (async_function || peek() == Token::FUNCTION) {
+    if (async_function)
+      Consume(Token::ASYNC);
     Expect(Token::FUNCTION, CHECK_OK);
     int function_token_position = scanner().location().beg_pos;
     Handle<String> name;
@@ -3514,7 +4576,9 @@ Expression* Parser::ParseMemberWithNewPrefixesExpression(PositionStack* stack,
                                   is_strict_reserved_name,
                                   function_token_position,
                                   type,
+                                  async_function,
                                   CHECK_OK);
+    if (!*ok) return NULL;
   } else {
     result = ParsePrimaryExpression(CHECK_OK);
   }
@@ -3703,14 +4767,15 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
       result = ParseObjectLiteral(CHECK_OK);
       break;
 
-    case Token::LPAREN:
+    case Token::LPAREN: {
       Consume(Token::LPAREN);
       // Heuristically try to detect immediately called functions before
       // seeing the call parentheses.
-      parenthesized_function_ = (peek() == Token::FUNCTION);
+      parenthesized_function_ = (peek() == Token::FUNCTION || peek() == Token::ASYNC);
       result = ParseExpression(true, CHECK_OK);
       Expect(Token::RPAREN, CHECK_OK);
       break;
+    }
 
     case Token::MOD:
       if (allow_natives_syntax_ || extension_ != NULL) {
@@ -4121,6 +5186,7 @@ ObjectLiteral::Property* Parser::ParseObjectLiteralGetSet(bool is_getter,
                              false,   // reserved words are allowed here
                              RelocInfo::kNoPosition,
                              FunctionLiteral::ANONYMOUS_EXPRESSION,
+                             false,
                              CHECK_OK);
     // Allow any number of parameters for compatibilty with JSC.
     // Specification only allows zero parameters for get and one for set.
@@ -4421,9 +5487,17 @@ FunctionLiteral* Parser::ParseFunctionLiteral(Handle<String> function_name,
                                               bool name_is_strict_reserved,
                                               int function_token_position,
                                               FunctionLiteral::Type type,
+                                              bool is_async_function,
                                               bool* ok) {
   // Function ::
   //   '(' FormalParameterList? ')' '{' FunctionBody '}'
+
+  AsyncFunction async_function(this);
+  AsyncFunction* previous_async_function = async_function_;
+  if (is_async_function)
+    async_function_ = &async_function;
+  else
+    async_function_ = NULL;
 
   // Anonymous functions were passed either the empty symbol or a null
   // handle as the function name.  Remember if we were passed a non-empty
@@ -4492,6 +5566,13 @@ FunctionLiteral* Parser::ParseFunctionLiteral(Handle<String> function_name,
       }
       done = (peek() == Token::RPAREN);
       if (!done) Expect(Token::COMMA, CHECK_OK);
+    }
+    if (is_async_function) {
+      top_scope_->DeclareParameter(async_function_->callback(),
+        is_extended_mode()
+         ? LET
+         : VAR);
+       num_parameters++;
     }
     Expect(Token::RPAREN, CHECK_OK);
 
@@ -4689,10 +5770,12 @@ FunctionLiteral* Parser::ParseFunctionLiteral(Handle<String> function_name,
                                     num_parameters,
                                     duplicate_parameters,
                                     type,
-                                    FunctionLiteral::kIsFunction);
+                                    FunctionLiteral::kIsFunction,
+                                    is_async_function);
   function_literal->set_function_token_position(function_token_position);
   function_literal->set_ast_properties(&ast_properties);
 
+  if (is_async_function) async_function_ = previous_async_function;
   if (fni_ != NULL && should_infer_name) fni_->AddFunction(function_literal);
   return function_literal;
 }

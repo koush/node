@@ -129,7 +129,8 @@ class PreParser {
         allow_modules_(allow_modules),
         allow_natives_syntax_(allow_natives_syntax),
         parenthesized_function_(false),
-        harmony_scoping_(scanner->HarmonyScoping()) { }
+        harmony_scoping_(scanner->HarmonyScoping()),
+        async_function_(false) { }
 
   ~PreParser() {}
 
@@ -572,7 +573,10 @@ class PreParser {
   Expression ParseV8Intrinsic(bool* ok);
 
   Arguments ParseArguments(bool* ok);
-  Expression ParseFunctionLiteral(bool* ok);
+  Expression ParseFunctionLiteral(bool* ok,
+                                  bool require_lparen = true,
+                                  i::Token::Value param_end_token = i::Token::RPAREN,
+                                  bool process_braces = true);
   void ParseLazyFunctionLiteralBody(bool* ok);
 
   Identifier ParseIdentifier(bool* ok);
@@ -580,6 +584,9 @@ class PreParser {
   Identifier ParseIdentifierNameOrGetOrSet(bool* is_get,
                                            bool* is_set,
                                            bool* ok);
+
+  Statement ParseAwaitStatement(bool* ok);
+  Statement ParseAsyncStatement(bool* ok);
 
   // Logs the currently parsed literal as a symbol in the preparser data.
   void LogSymbol();
@@ -666,6 +673,7 @@ class PreParser {
   bool allow_natives_syntax_;
   bool parenthesized_function_;
   bool harmony_scoping_;
+  bool async_function_;
 };
 } }  // v8::preparser
 

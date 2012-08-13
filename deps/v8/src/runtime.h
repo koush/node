@@ -223,6 +223,8 @@ namespace internal {
   F(FunctionMarkNameShouldPrintAsAnonymous, 1, 1) \
   F(FunctionBindArguments, 4, 1) \
   F(BoundFunctionGetBindings, 1, 1) \
+  F(FunctionNameShouldPrintAsAsync, 1, 1) \
+  F(FunctionMarkNameShouldPrintAsAsync, 1, 1) \
   F(FunctionRemovePrototype, 1, 1) \
   F(FunctionGetSourceCode, 1, 1) \
   F(FunctionGetScript, 1, 1) \

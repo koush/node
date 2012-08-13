@@ -5483,6 +5483,10 @@ class SharedFunctionInfo: public HeapObject {
   // see a binding for it.
   DECL_BOOLEAN_ACCESSORS(name_should_print_as_anonymous)
 
+  // Indicates that the function was created as an async function
+  // which may contain the await keyword.
+  DECL_BOOLEAN_ACCESSORS(name_should_print_as_async)
+
   // Indicates whether the function is a bound function created using
   // the bind function.
   DECL_BOOLEAN_ACCESSORS(bound)
@@ -5733,6 +5737,7 @@ class SharedFunctionInfo: public HeapObject {
     kIsFunction,
     kDontOptimize,
     kDontInline,
+    kNameShouldPrintAsAsync,
     kCompilerHintsCount  // Pseudo entry
   };
 
