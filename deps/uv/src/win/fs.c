@@ -98,6 +98,12 @@ const WCHAR LONG_PATH_PREFIX[] = L"\\\\?\\";
 const WCHAR LONG_PATH_PREFIX_LEN = 4;
 
 
+static HANDLE __get_osfhandle(intptr_t fd) {
+  if (fd > 0)
+    return _get_osfhandle(fd);
+  return (HANDLE)-fd;
+}
+
 void uv_fs_init() {
   _fmode = _O_BINARY;
 }
@@ -535,7 +541,7 @@ void fs__read(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE) _get_osfhandle(fd);
+  handle = (HANDLE) __get_osfhandle(fd);
   if (handle == INVALID_HANDLE_VALUE) {
     SET_REQ_RESULT(req, -1);
     return;
@@ -582,7 +588,7 @@ void fs__write(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE) _get_osfhandle(fd);
+  handle = (HANDLE) __get_osfhandle(fd);
   if (handle == INVALID_HANDLE_VALUE) {
     SET_REQ_RESULT(req, -1);
     return;
@@ -961,7 +967,7 @@ INLINE static void fs__sync_impl(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  result = FlushFileBuffers((HANDLE) _get_osfhandle(fd)) ? 0 : -1;
+  result = FlushFileBuffers((HANDLE) __get_osfhandle(fd)) ? 0 : -1;
   if (result == -1) {
     SET_REQ_WIN32_ERROR(req, GetLastError());
   } else {
@@ -1068,7 +1074,7 @@ static void fs__fchmod(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE)_get_osfhandle(fd);
+  handle = (HANDLE)__get_osfhandle(fd);
 
   nt_status = pNtQueryInformationFile(handle,
                                       &io_status,
