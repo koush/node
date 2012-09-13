@@ -33,6 +33,8 @@ class UDPWrap: public HandleWrap {
   static Handle<Value> SetTTL(const Arguments& args);
   static UDPWrap* Unwrap(Local<Object> obj);
 
+  static v8::Handle<v8::Value> BindToInterface(const v8::Arguments& args);
+
   uv_udp_t* UVHandle();
 
  private:

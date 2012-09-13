@@ -49,6 +49,8 @@ class TCPWrap : public StreamWrap {
   static v8::Handle<v8::Value> Connect6(const v8::Arguments& args);
   static v8::Handle<v8::Value> Open(const v8::Arguments& args);
 
+  static v8::Handle<v8::Value> BindToInterface(const v8::Arguments& args);
+
 #ifdef _WIN32
   static v8::Handle<v8::Value> SetSimultaneousAccepts(const v8::Arguments& args);
 #endif

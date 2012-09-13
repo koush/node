@@ -110,6 +110,8 @@ void UDPWrap::Initialize(Handle<Object> target) {
   NODE_SET_PROTOTYPE_METHOD(t, "setBroadcast", SetBroadcast);
   NODE_SET_PROTOTYPE_METHOD(t, "setTTL", SetTTL);
 
+  NODE_SET_PROTOTYPE_METHOD(t, "bindToInterface", BindToInterface);
+
   target->Set(String::NewSymbol("UDP"),
               Persistent<FunctionTemplate>::New(t)->GetFunction());
 }
@@ -122,6 +124,20 @@ Handle<Value> UDPWrap::New(const Arguments& args) {
   new UDPWrap(args.This());
 
   return scope.Close(args.This());
+}
+
+
+Handle<Value> UDPWrap::BindToInterface(const Arguments& args) {
+  UNWRAP(UDPWrap)
+  String::AsciiValue interfaceName(args[0]);
+  int r = uv_udp_bind_to_interface(&wrap->handle_, *interfaceName);
+
+  if (r) {
+    SetErrno(uv_last_error(uv_default_loop()));
+    return Null();
+  }
+
+  return Undefined();
 }
 
 Handle<Value> UDPWrap::DoBind(const Arguments& args, int family) {

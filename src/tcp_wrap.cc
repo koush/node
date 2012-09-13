@@ -115,6 +115,8 @@ void TCPWrap::Initialize(Handle<Object> target) {
   NODE_SET_PROTOTYPE_METHOD(t, "setNoDelay", SetNoDelay);
   NODE_SET_PROTOTYPE_METHOD(t, "setKeepAlive", SetKeepAlive);
 
+  NODE_SET_PROTOTYPE_METHOD(t, "bindToInterface", BindToInterface);
+
 #ifdef _WIN32
   NODE_SET_PROTOTYPE_METHOD(t, "setSimultaneousAccepts", SetSimultaneousAccepts);
 #endif
@@ -167,6 +169,18 @@ TCPWrap::~TCPWrap() {
   assert(object_.IsEmpty());
 }
 
+Handle<Value> TCPWrap::BindToInterface(const Arguments& args) {
+  UNWRAP(TCPWrap)
+  String::AsciiValue interfaceName(args[0]);
+  int r = uv_tcp_bind_to_interface(&wrap->handle_, *interfaceName);
+
+  if (r) {
+    SetErrno(uv_last_error(uv_default_loop()));
+    return Null();
+  }
+
+  return Undefined();
+}
 
 Handle<Value> TCPWrap::GetSockName(const Arguments& args) {
   HandleScope scope;

@@ -603,6 +603,10 @@ UV_EXTERN int uv_tcp_keepalive(uv_tcp_t* handle, int enable,
  */
 UV_EXTERN int uv_tcp_simultaneous_accepts(uv_tcp_t* handle, int enable);
 
+UV_EXTERN int uv_tcp_bind_to_interface(uv_tcp_t* handle, const char* interface);
+UV_EXTERN int uv_udp_bind_to_interface(uv_udp_t* handle, const char* interface);
+
+
 UV_EXTERN int uv_tcp_bind(uv_tcp_t* handle, struct sockaddr_in);
 UV_EXTERN int uv_tcp_bind6(uv_tcp_t* handle, struct sockaddr_in6);
 UV_EXTERN int uv_tcp_getsockname(uv_tcp_t* handle, struct sockaddr* name,

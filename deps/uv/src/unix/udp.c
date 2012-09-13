@@ -659,3 +659,26 @@ int uv_udp_recv_stop(uv_udp_t* handle) {
   handle->recv_cb = NULL;
   return 0;
 }
+
+#include <string.h>
+#if defined(__unix__) && !defined(__APPLE__)
+#include <sys/ioctl.h>
+#include <net/if.h>
+#endif
+int uv_udp_bind_to_interface(uv_udp_t* handle, const char* interface) {
+#if defined(__unix__) && !defined(__APPLE__)
+  struct ifreq ifr;
+  memset(&ifr, 0, sizeof(ifr));
+  snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), interface);
+
+  if (setsockopt(handle->fd,
+                 SOL_SOCKET,
+                 SO_BINDTODEVICE,
+                 (void *)&ifr,
+                 sizeof(ifr)) == -1) {
+    uv__set_sys_error(handle->loop, errno);
+    return -1;
+  }
+#endif
+  return 0;
+}

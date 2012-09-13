@@ -934,7 +934,7 @@ static void fs__fstat(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE) _get_osfhandle(fd);
+  handle = (HANDLE) __get_osfhandle(fd);
 
   if (handle == INVALID_HANDLE_VALUE) {
     SET_REQ_WIN32_ERROR(req, ERROR_INVALID_HANDLE);
@@ -995,7 +995,7 @@ static void fs__ftruncate(uv_fs_t* req) {
 
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE)_get_osfhandle(fd);
+  handle = (HANDLE)__get_osfhandle(fd);
 
   eof_info.EndOfFile.QuadPart = req->offset;
 
@@ -1155,7 +1155,7 @@ static void fs__futime(uv_fs_t* req) {
   HANDLE handle;
   VERIFY_FD(fd, req);
 
-  handle = (HANDLE) _get_osfhandle(fd);
+  handle = (HANDLE) __get_osfhandle(fd);
 
   if (handle == INVALID_HANDLE_VALUE) {
     SET_REQ_WIN32_ERROR(req, ERROR_INVALID_HANDLE);

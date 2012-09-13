@@ -26,7 +26,6 @@
 #include <assert.h>
 #include <errno.h>
 
-
 int uv_tcp_init(uv_loop_t* loop, uv_tcp_t* tcp) {
   uv__stream_init(loop, (uv_stream_t*)tcp, UV_TCP);
   loop->counters.tcp_init++;
@@ -356,5 +355,28 @@ int uv_tcp_keepalive(uv_tcp_t* handle, int enable, unsigned int delay) {
 
 
 int uv_tcp_simultaneous_accepts(uv_tcp_t* handle, int enable) {
+  return 0;
+}
+
+#include <string.h>
+#if defined(__unix__) && !defined(__APPLE__)
+#include <sys/ioctl.h>
+#include <net/if.h>
+#endif
+int uv_tcp_bind_to_interface(uv_tcp_t* handle, const char* interface) {
+#if defined(__unix__) && !defined(__APPLE__)
+  struct ifreq ifr;
+  memset(&ifr, 0, sizeof(ifr));
+  snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), interface);
+
+  if (setsockopt(handle->fd,
+                 SOL_SOCKET,
+                 SO_BINDTODEVICE,
+                 (void *)&ifr,
+                 sizeof(ifr)) == -1) {
+    uv__set_sys_error(handle->loop, errno);
+    return -1;
+  }
+#endif
   return 0;
 }
