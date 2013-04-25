@@ -1565,7 +1565,10 @@ function FunctionSourceString(func) {
   var name = %FunctionNameShouldPrintAsAnonymous(func)
       ? 'anonymous'
       : %FunctionGetName(func);
-  return 'function ' + name + source;
+  var function_type = %FunctionNameShouldPrintAsAsync(func)
+      ? 'async function '
+      : 'function ';
+  return function_type + name + source;
 }
 
 

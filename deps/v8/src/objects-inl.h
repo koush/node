@@ -4116,6 +4116,9 @@ BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, native, kNative)
 BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints,
                name_should_print_as_anonymous,
                kNameShouldPrintAsAnonymous)
+BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints,
+               name_should_print_as_async,
+               kNameShouldPrintAsAsync)
 BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, bound, kBoundFunction)
 BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, is_anonymous, kIsAnonymous)
 BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, is_function, kIsFunction)

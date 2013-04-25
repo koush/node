@@ -815,6 +815,10 @@ uc32 Scanner::ScanIdentifierUnicodeEscape() {
 // Keyword Matcher
 
 #define KEYWORDS(KEYWORD_GROUP, KEYWORD)                            \
+  KEYWORD_GROUP('$')                                                \
+  KEYWORD("$function", Token::ASYNC)                                \
+  KEYWORD_GROUP('a')                                                \
+  KEYWORD("await", Token::AWAIT)                                    \
   KEYWORD_GROUP('b')                                                \
   KEYWORD("break", Token::BREAK)                                    \
   KEYWORD_GROUP('c')                                                \
@@ -877,7 +881,7 @@ uc32 Scanner::ScanIdentifierUnicodeEscape() {
   KEYWORD("while", Token::WHILE)                                    \
   KEYWORD("with", Token::WITH)                                      \
   KEYWORD_GROUP('y')                                                \
-  KEYWORD("yield", Token::FUTURE_STRICT_RESERVED_WORD)
+  KEYWORD("yield", Token::YIELD)
 
 
 static Token::Value KeywordOrIdentifierToken(const char* input,

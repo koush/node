@@ -157,6 +157,7 @@ typedef ZoneList<Handle<Object> > ZoneObjectList;
 
 
 #define DECLARE_NODE_TYPE(type)                                         \
+  virtual void printType() { printf(#type); printf("\n"); }             \
   virtual void Accept(AstVisitor* v);                                   \
   virtual AstNode::Type node_type() const { return AstNode::k##type; }  \
   template<class> friend class AstNodeFactory;
@@ -206,6 +207,7 @@ class AstNode: public ZoneObject {
 
   virtual void Accept(AstVisitor* v) = 0;
   virtual Type node_type() const = 0;
+  virtual void printType() { printf("none\n"); }
 
   // Type testing & conversion functions overridden by concrete subclasses.
 #define DECLARE_NODE_FUNCTIONS(type)                  \
@@ -1947,6 +1949,11 @@ class FunctionLiteral: public Expression {
     kNotParenthesized
   };
 
+  enum IsAsyncFlag {
+    kIsAsync,
+    kNotAsync
+  };
+
   DECLARE_NODE_TYPE(FunctionLiteral)
 
   Handle<String> name() const { return name_; }
@@ -1961,6 +1968,9 @@ class FunctionLiteral: public Expression {
   bool is_anonymous() const { return IsAnonymous::decode(bitfield_); }
   bool is_classic_mode() const { return language_mode() == CLASSIC_MODE; }
   LanguageMode language_mode() const;
+  bool is_async() {
+    return IsAsync::decode(bitfield_) == kIsAsync;
+  }
 
   int materialized_literal_count() { return materialized_literal_count_; }
   int expected_property_count() { return expected_property_count_; }
@@ -2027,7 +2037,8 @@ class FunctionLiteral: public Expression {
                   Type type,
                   ParameterFlag has_duplicate_parameters,
                   IsFunctionFlag is_function,
-                  IsParenthesizedFlag is_parenthesized)
+                  IsParenthesizedFlag is_parenthesized,
+                  IsAsyncFlag is_async)
       : Expression(isolate),
         name_(name),
         scope_(scope),
@@ -2047,7 +2058,8 @@ class FunctionLiteral: public Expression {
         Pretenure::encode(false) |
         HasDuplicateParameters::encode(has_duplicate_parameters) |
         IsFunction::encode(is_function) |
-        IsParenthesized::encode(is_parenthesized);
+        IsParenthesized::encode(is_parenthesized) |
+        IsAsync::encode(is_async);
   }
 
  private:
@@ -2072,6 +2084,7 @@ class FunctionLiteral: public Expression {
   class HasDuplicateParameters: public BitField<ParameterFlag, 4, 1> {};
   class IsFunction: public BitField<IsFunctionFlag, 5, 1> {};
   class IsParenthesized: public BitField<IsParenthesizedFlag, 6, 1> {};
+  class IsAsync: public BitField<IsAsyncFlag, 7, 1> {};
 };
 
 
@@ -2872,13 +2885,14 @@ class AstNodeFactory BASE_EMBEDDED {
       FunctionLiteral::ParameterFlag has_duplicate_parameters,
       FunctionLiteral::Type type,
       FunctionLiteral::IsFunctionFlag is_function,
-      FunctionLiteral::IsParenthesizedFlag is_parenthesized) {
+      FunctionLiteral::IsParenthesizedFlag is_parenthesized,
+      FunctionLiteral::IsAsyncFlag is_async) {
     FunctionLiteral* lit = new(zone_) FunctionLiteral(
         isolate_, name, scope, body,
         materialized_literal_count, expected_property_count, handler_count,
         has_only_simple_this_property_assignments, this_property_assignments,
         parameter_count, type, has_duplicate_parameters, is_function,
-        is_parenthesized);
+        is_parenthesized, is_async);
     // Top-level literal doesn't count for the AST's properties.
     if (is_function == FunctionLiteral::kIsFunction) {
       visitor_.VisitFunctionLiteral(lit);

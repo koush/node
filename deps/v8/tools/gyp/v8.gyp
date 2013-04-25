@@ -764,6 +764,7 @@
               '../../src/array.js',
               '../../src/string.js',
               '../../src/uri.js',
+              '../../src/generator.js',
               '../../src/math.js',
               '../../src/messages.js',
               '../../src/apinatives.js',
