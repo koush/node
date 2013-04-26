@@ -3861,14 +3861,17 @@ Statement* Parser::ParseForStatement(ZoneStringList* labels, bool* ok) {
   top_scope_ = for_scope;
 
   Expect(Token::FOR, CHECK_OK);
-	Expect(Token::LPAREN, CHECK_OK);
+  Expect(Token::LPAREN, CHECK_OK);
   for_scope->set_start_position(scanner().location().beg_pos);
   if (peek() != Token::SEMICOLON) {
     if (peek() == Token::VAR || peek() == Token::CONST) {
+      bool is_const = peek() == Token::CONST;
       Block* variable_statement =
           ParseVariableDeclarations(kForStatement, NULL, NULL, &name, CHECK_OK);
 
       if (peek() == Token::IN && !name.is_null()) {
+        Interface* interface =
+            is_const ? Interface::NewConst() : Interface::NewValue();
         if (async_function_) {
           *ok = false;
           ReportMessage("illegal_async_for_in", Vector<const char*>::empty());
@@ -3882,7 +3885,7 @@ Statement* Parser::ParseForStatement(ZoneStringList* labels, bool* ok) {
         Expect(Token::RPAREN, CHECK_OK);
 
         VariableProxy* each =
-            TopScopeNewUnresolved(name);
+            top_scope_->NewUnresolved(factory(), name, interface);
         Statement* body = ParseStatement(NULL, CHECK_OK);
         loop->Initialize(each, enumerable, body);
         Block* result = factory()->NewBlock(NULL, 2, false);
@@ -3941,7 +3944,7 @@ Statement* Parser::ParseForStatement(ZoneStringList* labels, bool* ok) {
         Expect(Token::RPAREN, CHECK_OK);
 
         VariableProxy* each =
-            TopScopeNewUnresolved(name);
+            top_scope_->NewUnresolved(factory(), name, Interface::NewValue());
         Statement* body = ParseStatement(NULL, CHECK_OK);
         Block* body_block = factory()->NewBlock(NULL, 3, false);
         Assignment* assignment = factory()->NewAssignment(
@@ -4789,7 +4792,7 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
       result = ParseObjectLiteral(CHECK_OK);
       break;
 
-    case Token::LPAREN: {
+    case Token::LPAREN:
       Consume(Token::LPAREN);
       // Heuristically try to detect immediately called functions before
       // seeing the call parentheses.
@@ -4797,7 +4800,6 @@ Expression* Parser::ParsePrimaryExpression(bool* ok) {
       result = ParseExpression(true, CHECK_OK);
       Expect(Token::RPAREN, CHECK_OK);
       break;
-    }
 
     case Token::MOD:
       if (allow_natives_syntax_ || extension_ != NULL) {

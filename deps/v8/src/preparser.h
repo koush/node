@@ -587,7 +587,6 @@ class PreParser {
 
   Statement ParseYieldStatement(bool* ok);
   Statement ParseAwaitStatement(bool* ok);
-  Statement ParseAsyncStatement(bool* ok);
 
   // Logs the currently parsed literal as a symbol in the preparser data.
   void LogSymbol();

@@ -294,9 +294,19 @@ PreParser::Statement PreParser::ParseStatement(bool* ok) {
     case i::Token::ASYNC: {
       bool was_async_function = async_function_;
       async_function_ = true;
-      Statement ret = ParseAsyncStatement(ok);
+
+      i::Scanner::Location start_location = scanner_->peek_location();
+      Statement statement = ParseFunctionDeclaration(CHECK_OK);
+      i::Scanner::Location end_location = scanner_->location();
       async_function_ = was_async_function;
-      return ret;
+      if (!is_classic_mode()) {
+        ReportMessageAt(start_location.beg_pos, end_location.end_pos,
+                        "strict_function", NULL);
+        *ok = false;
+        return Statement::Default();
+      } else {
+        return statement;
+      }
     }
 
     default:
@@ -304,15 +314,11 @@ PreParser::Statement PreParser::ParseStatement(bool* ok) {
   }
 }
 
+
 PreParser::Statement PreParser::ParseYieldStatement(bool* ok) {
   Expect(i::Token::YIELD, CHECK_OK);
   Expression expression = ParseExpression(true, CHECK_OK);
   return Statement::ExpressionStatement(expression);
-}
-
-PreParser::Statement PreParser::ParseAsyncStatement(bool* ok) {
-  Expect(i::Token::ASYNC, CHECK_OK);
-  return ParseFunctionDeclaration(ok);
 }
 
 
@@ -325,7 +331,12 @@ PreParser::Statement PreParser::ParseAwaitStatement(bool* ok) {
 PreParser::Statement PreParser::ParseFunctionDeclaration(bool* ok) {
   // FunctionDeclaration ::
   //   'function' Identifier '(' FormalParameterListopt ')' '{' FunctionBody '}'
-  Expect(i::Token::FUNCTION, CHECK_OK);
+  if (peek() == i::Token::FUNCTION) {
+    Expect(i::Token::FUNCTION, CHECK_OK);
+  }
+  else {
+    Expect(i::Token::ASYNC, CHECK_OK);
+  }
 
   Identifier identifier = ParseIdentifier(CHECK_OK);
   i::Scanner::Location location = scanner_->location();
@@ -1074,7 +1085,6 @@ PreParser::Expression PreParser::ParseMemberWithNewPrefixesExpression(
   if (async_function || peek() == i::Token::FUNCTION) {
     if (async_function) {
       Consume(i::Token::ASYNC);
-      Expect(i::Token::FUNCTION, CHECK_OK);
     }
     else {
       Consume(i::Token::FUNCTION);

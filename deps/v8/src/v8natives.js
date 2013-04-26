@@ -1566,7 +1566,7 @@ function FunctionSourceString(func) {
       ? 'anonymous'
       : %FunctionGetName(func);
   var function_type = %FunctionNameShouldPrintAsAsync(func)
-      ? 'async function '
+      ? '$function '
       : 'function ';
   return function_type + name + source;
 }
