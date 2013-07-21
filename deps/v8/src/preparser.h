@@ -571,6 +571,8 @@ class PreParser {
   Statement ParseTryStatement(bool* ok);
   Statement ParseDebuggerStatement(bool* ok);
 
+  Statement ParseAwaitStatement(bool* ok);
+
   Expression ParseExpression(bool accept_IN, bool* ok);
   Expression ParseAssignmentExpression(bool accept_IN, bool* ok);
   Expression ParseYieldExpression(bool* ok);

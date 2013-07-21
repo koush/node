@@ -815,6 +815,8 @@ uc32 Scanner::ScanIdentifierUnicodeEscape() {
 // Keyword Matcher
 
 #define KEYWORDS(KEYWORD_GROUP, KEYWORD)                            \
+  KEYWORD_GROUP('a')                                                \
+  KEYWORD("await", Token::AWAIT)                                    \
   KEYWORD_GROUP('b')                                                \
   KEYWORD("break", Token::BREAK)                                    \
   KEYWORD_GROUP('c')                                                \

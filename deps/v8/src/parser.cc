@@ -1355,6 +1355,9 @@ Statement* Parser::ParseStatement(ZoneStringList* labels, bool* ok) {
   int statement_pos = scanner().peek_location().beg_pos;
   Statement* stmt = NULL;
   switch (peek()) {
+    case Token::AWAIT:
+      return ParseAwaitStatement(labels, ok);
+
     case Token::LBRACE:
       return ParseBlock(labels, ok);
 
@@ -2992,6 +2995,114 @@ Expression* Parser::ParseAssignmentExpression(bool accept_IN, bool* ok) {
   }
 
   return factory()->NewAssignment(op, expression, right, pos);
+}
+
+
+Statement* Parser::ParseAwaitStatement(ZoneStringList* labels, bool *ok) {
+  if (!is_generator()) {
+    *ok = false;
+    ReportMessage("illegal_await", Vector<const char*>::empty());
+    return NULL;
+  }
+
+  Expect(Token::AWAIT, CHECK_OK);
+  bool delegating = Check(Token::MUL);
+
+  ZoneStringList parameter_names(4, zone());
+
+  bool parameter_found = false;
+  while (peek() == Token::IDENTIFIER) {
+    parameter_found = true;
+    Handle<String> param_name = ParseIdentifier(CHECK_OK);
+    parameter_names.Add(param_name, zone());
+    if (peek() == Token::COMMA) {
+      Expect(Token::COMMA, CHECK_OK);
+    }
+  }
+
+  if (peek() != Token::SEMICOLON)
+    Expect(Token::ASSIGN, CHECK_OK);
+
+  // grab the next statement, which should be a function call.
+  Statement* function_call = ParseExpressionOrLabelledStatement(labels, ok);
+  ExpressionStatement* stmt = function_call->AsExpressionStatement();
+  if (stmt == NULL) {
+    *ok = false;
+    ReportMessage("illegal_await", Vector<const char*>::empty());
+    return NULL;
+  }
+
+  Expression* expr = stmt->expression();
+  Call* call = expr->AsCall();
+
+  if (delegating) {
+    Handle<String> delegate_name = isolate()->factory()->InternalizeOneByteString(
+        STATIC_ASCII_VECTOR("delegate"));
+    Expression* delegate_literal =
+        factory()->NewLiteral(delegate_name);
+    Expression* delegate_property = factory()->NewProperty(
+        expr, delegate_literal, RelocInfo::kNoPosition);
+    ZoneList<Expression*>* delegate_arguments =
+        new(zone()) ZoneList<Expression*>(0, zone());
+    call = factory()->NewCall(delegate_property, delegate_arguments, RelocInfo::kNoPosition);
+  }
+
+  if (call == NULL) {
+    *ok = false;
+    ReportMessage("illegal_await", Vector<const char*>::empty());
+    return NULL;
+  }
+
+  Handle<String> await_name = isolate()->factory()->InternalizeOneByteString(
+      STATIC_ASCII_VECTOR("await"));
+  Expression* await_literal =
+      factory()->NewLiteral(await_name);
+  VariableProxy* await_proxy = factory()->NewVariableProxy(
+      current_function_state_->generator_object_variable());
+  Expression* await_property = factory()->NewProperty(
+      await_proxy, await_literal, RelocInfo::kNoPosition);
+  ZoneList<Expression*>* await_arguments =
+      new(zone()) ZoneList<Expression*>(0, zone());
+  Expression* await_call = factory()->NewCall(
+      await_property, await_arguments, RelocInfo::kNoPosition);
+
+  ZoneList<Expression*>* arguments = call->arguments();
+  arguments->Add(await_call, zone());
+
+  Expression* generator_object = factory()->NewVariableProxy(
+      current_function_state_->generator_object_variable());
+  Yield* yield =
+      factory()->NewYield(generator_object, call, Yield::SUSPEND, scanner().peek_location().beg_pos);
+
+  Handle<String> tempname = isolate()->factory()->InternalizeOneByteString(
+      STATIC_ASCII_VECTOR(".yield_arguments"));
+  Variable* temp = top_scope_->DeclarationScope()->NewTemporary(tempname);
+  VariableProxy* init_proxy = factory()->NewVariableProxy(temp);
+
+  Assignment* assignment = factory()->NewAssignment(
+      Token::INIT_VAR, init_proxy, yield, RelocInfo::kNoPosition);
+
+  Block* result = factory()->NewBlock(NULL, 1, true);
+  result->AddStatement(factory()->NewExpressionStatement(assignment), zone());
+
+  int param_count = 0;
+  while (!parameter_names.is_empty()) {
+    Handle<String> param_name = parameter_names.Remove(0);
+    Variable* param =
+        top_scope_->DeclarationScope()->DeclareLocal(param_name, VAR, kCreatedInitialized);
+    VariableProxy* param_proxy = factory()->NewVariableProxy(param);
+    VariableProxy* arguments_proxy = factory()->NewVariableProxy(temp);
+    Expression* index_literal =
+        factory()->NewNumberLiteral(param_count);
+    Expression* argument_property = factory()->NewProperty(
+        arguments_proxy, index_literal, RelocInfo::kNoPosition);
+    Assignment* param_assignment = factory()->NewAssignment(
+        Token::INIT_VAR, param_proxy, argument_property, RelocInfo::kNoPosition);
+    result->AddStatement(factory()->NewExpressionStatement(param_assignment), zone());
+    param_count++;
+  }
+
+  return result;
 }
 
 

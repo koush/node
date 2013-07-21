@@ -175,6 +175,7 @@ namespace internal {
   K(IMPORT, "import", 0)                                                \
   K(LET, "let", 0)                                                      \
   K(YIELD, "yield", 0)                                                  \
+  K(AWAIT, "await", 0)                                                  \
                                                                         \
   /* Illegal token - not able to scan. */                               \
   T(ILLEGAL, "ILLEGAL", 0)                                              \

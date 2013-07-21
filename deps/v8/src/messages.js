@@ -28,6 +28,8 @@
 // -------------------------------------------------------------------
 
 var kMessages = {
+  illegal_await:                 ["Illegal await statement"],
+
   // Error
   cyclic_proto:                  ["Cyclic __proto__ value"],
   code_gen_from_strings:         ["%0"],

@@ -71,13 +71,40 @@ function GeneratorFunctionConstructor(arg1) {  // length == 1
   return f;
 }
 
+function GeneratorObjectAwait() {
+  return function() {
+    var args = arguments;
+    global.process.nextTick(function() {
+      this.next(args);
+    }.bind(this));
+  }.bind(this);
+}
+
+
+function GeneratorObjectDelegate(cb) {
+  var next = this.next.bind(this);
+  this.next = function() {
+    var i = next.apply(null, arguments);
+    if (i.done) {
+      global.process.nextTick(function() {
+        cb(i.value);
+      });
+    }
+    return i;
+  }.bind(this);
+
+  this.next();
+}
+
 
 function SetUpGenerators() {
   %CheckIsBootstrapping();
   var GeneratorObjectPrototype = GeneratorFunctionPrototype.prototype;
   InstallFunctions(GeneratorObjectPrototype,
-                   DONT_ENUM | DONT_DELETE | READ_ONLY,
+                   DONT_ENUM | DONT_DELETE,
                    ["next", GeneratorObjectNext,
+                    "delegate", GeneratorObjectDelegate,
+                    "await", GeneratorObjectAwait,
                     "throw", GeneratorObjectThrow]);
   %SetProperty(GeneratorObjectPrototype, "constructor",
                GeneratorFunctionPrototype, DONT_ENUM | DONT_DELETE | READ_ONLY);

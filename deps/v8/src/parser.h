@@ -645,6 +645,8 @@ class Parser BASE_EMBEDDED {
   TryStatement* ParseTryStatement(bool* ok);
   DebuggerStatement* ParseDebuggerStatement(bool* ok);
 
+  Statement* ParseAwaitStatement(ZoneStringList* labels, bool* ok);
+
   // Support for hamony block scoped bindings.
   Block* ParseScopedBlock(ZoneStringList* labels, bool* ok);
 

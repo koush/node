@@ -229,6 +229,9 @@ PreParser::Statement PreParser::ParseStatement(bool* ok) {
 
   // Keep the source position of the statement
   switch (peek()) {
+    case i::Token::AWAIT:
+      return ParseAwaitStatement(ok);
+
     case i::Token::LBRACE:
       return ParseBlock(ok);
 
@@ -1693,6 +1696,9 @@ bool PreParser::peek_any_identifier() {
          next == i::Token::YIELD;
 }
 
+PreParser::Statement PreParser::ParseAwaitStatement(bool *ok) {
+  return Statement::Default();
+}
 
 int DuplicateFinder::AddAsciiSymbol(i::Vector<const char> key, int value) {
   return AddSymbol(i::Vector<const byte>::cast(key), true, value);
