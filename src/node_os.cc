@@ -297,7 +297,7 @@ static char* GetDeviceGuid()
       RegCloseKey(reg_adapter);
       continue;
     }
-    if (strcmp("tap0901", value) == 0)
+    if (stricmp("tap0901", value) == 0)
     {
       char* ret = (char*)malloc(256);
       len = 256;
